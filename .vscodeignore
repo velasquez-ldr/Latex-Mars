@@ -1,0 +1,11 @@
+# La extensión se publica ya empaquetada (ver esbuild.mjs): solo viaja lo que se lista aquí.
+**
+!package.json
+!README.md
+!LICENSE
+!CHANGELOG.md
+!THIRD-PARTY-NOTICES.md
+!dist/**
+!media/**
+!dict/**
+!tex/**

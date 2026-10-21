@@ -1,0 +1,54 @@
+# Cambios
+
+## 0.30.0
+
+Primera versión publicada en el Marketplace.
+
+- Nuevo nombre: **LaTeX Mars**, con icono propio.
+- Licencia MIT.
+- La orden propia de PDF (`mars.pdf.command`) recibe el documento por la variable de entorno
+  `MARS_DOC`: una ruta con comillas, `$` o `;` ya no puede romperla.
+
+## 0.29.0
+
+- **Viñetas por niveles**: el menú de viñetas dice en qué nivel está el cursor y marca su
+  símbolo. **Lista multinivel**: viñetas de LaTeX, formas, flechas, esquema (1. a) i) A.),
+  numeración por niveles (1. / 1.1. / 1.1.1.) y romanos, aplicados a todos los niveles a la vez.
+- Los botones de sangría ⇤ ⇥ suben y bajan de nivel dentro de una lista.
+- La numeración por niveles (`\arabic{enumi}.\arabic*.`) se dibuja como en el PDF.
+- Corregido: la viñeta ■ no añadía el paquete `amssymb`.
+
+## 0.28.1
+
+- Al editar una hoja horizontal, la hoja apaisada queda centrada sobre la vertical y en el centro
+  de la vista.
+
+## 0.28.0
+
+- **Encabezado y pie de página**: se escriben desde Mars (Insertar → Encabezado / Pie, o doble
+  clic en el margen de una hoja), con tres casillas arriba y abajo, rayas y vista previa.
+  Insertar → Número coloca el número de página o lo quita. Se escribe con `fancyhdr`.
+- Un `\pagestyle` dentro de un entorno solo vale en él, como en LaTeX (antes podía dejar todo el
+  documento sin números de página).
+- Al editar una hoja horizontal se ve la hoja apaisada entera, a tamaño real.
+- Listas: `Enter` al final de un elemento con sublista deja el cursor en el elemento nuevo; en un
+  elemento vacío de una sublista sube un nivel; ya no quedan `\\` sueltos en el código.
+- En español, la letra del segundo nivel numerado va en cursiva, como con babel.
+
+## 0.27.0
+
+- Las preferencias de la vista (papel, zoom, vista de página o continua, cinta minimizada,
+  colores recientes) valen para todos los documentos y se recuerdan.
+- Con un editor visual abierto, los demás `.tex` que se abren se muestran también en él
+  (ajuste `mars.openInVisualEditor`).
+
+## 0.26.1
+
+- Hojas horizontales: por defecto se ven giradas como en el PDF y se ponen derechas al editarlas.
+
+## 0.26.0
+
+- **Hojas horizontales** (`\begin{landscape}`): en hoja propia, como en LaTeX, y con la opción de
+  verlas giradas o derechas (ajuste `mars.landscapePages`). Insertar una hoja horizontal y pasar
+  de `lscape` a `pdflscape` desde Disposición → Orientación.
+- Las órdenes de `eso-pic` no se dibujan como código.

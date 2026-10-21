@@ -1,0 +1,295 @@
+{
+  "name": "latex-mars",
+  "displayName": "LaTeX Mars",
+  "description": "Editor visual (WYSIWYM) de LaTeX: escribe sobre el documento como en Word, sin compilar a PDF",
+  "version": "0.30.0",
+  "publisher": "lider-mars",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/velasquez-ldr/Latex-Mars.git"
+  },
+  "bugs": {
+    "url": "https://github.com/velasquez-ldr/Latex-Mars/issues"
+  },
+  "homepage": "https://github.com/velasquez-ldr/Latex-Mars#readme",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#151131",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Education",
+    "Other"
+  ],
+  "keywords": [
+    "latex",
+    "tex",
+    "wysiwyg",
+    "wysiwym",
+    "editor visual",
+    "visual editor",
+    "tesis",
+    "thesis",
+    "pdf",
+    "synctex",
+    "bibtex",
+    "zotero",
+    "tikz",
+    "español"
+  ],
+  "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Mars ejecuta programas sobre los archivos de la carpeta (git, LaTeX y la orden de «mars.pdf.command»): solo se activa en carpetas de confianza."
+    }
+  },
+  "activationEvents": [
+    "onLanguage:latex",
+    "onLanguage:tex"
+  ],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "mars.editor",
+        "displayName": "Mars (editor visual de LaTeX)",
+        "selector": [
+          {
+            "filenamePattern": "*.tex"
+          },
+          {
+            "filenamePattern": "*.ltx"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "commands": [
+      {
+        "command": "mars.openPreviewToSide",
+        "title": "Mars: Abrir editor visual al lado",
+        "icon": "$(play)"
+      },
+      {
+        "command": "mars.openPreview",
+        "title": "Mars: Abrir editor visual"
+      },
+      {
+        "command": "mars.save",
+        "title": "Mars: Guardar documento"
+      },
+      {
+        "command": "mars.newDocument",
+        "title": "Mars: Nuevo documento (plantillas)",
+        "shortTitle": "Documento LaTeX (Mars)",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "mars.toggleDefaultEditor",
+        "title": "Mars: Abrir siempre los .tex con el editor visual (activar o desactivar)"
+      },
+      {
+        "command": "mars.exportPdf",
+        "title": "Mars: Exportar a PDF (compilar con LaTeX)",
+        "icon": "$(file-pdf)"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "mars.openPreviewToSide",
+          "when": "editorLangId == latex || editorLangId == tex || resourceExtname == .tex",
+          "group": "navigation@0"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "mars.openPreviewToSide",
+          "when": "resourceExtname == .tex",
+          "group": "navigation"
+        },
+        {
+          "command": "mars.newDocument",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation@9"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "mars.save",
+          "when": "activeCustomEditorId == 'mars.editor'"
+        },
+        {
+          "command": "mars.exportPdf",
+          "when": "activeCustomEditorId == 'mars.editor'"
+        }
+      ],
+      "file/newFile": [
+        {
+          "command": "mars.newDocument",
+          "group": "file"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "mars.openPreviewToSide",
+        "key": "ctrl+k v",
+        "mac": "cmd+k v",
+        "when": "editorLangId == latex || editorLangId == tex || resourceExtname == .tex"
+      },
+      {
+        "command": "mars.save",
+        "key": "ctrl+s",
+        "mac": "cmd+s",
+        "when": "activeCustomEditorId == 'mars.editor'"
+      },
+      {
+        "command": "mars.noop",
+        "key": "ctrl+b",
+        "mac": "cmd+b",
+        "when": "activeCustomEditorId == 'mars.editor' && !webviewFindWidgetFocused"
+      },
+      {
+        "command": "mars.noop",
+        "key": "ctrl+i",
+        "mac": "cmd+i",
+        "when": "activeCustomEditorId == 'mars.editor' && !webviewFindWidgetFocused"
+      },
+      {
+        "command": "mars.noop",
+        "key": "ctrl+u",
+        "mac": "cmd+u",
+        "when": "activeCustomEditorId == 'mars.editor' && !webviewFindWidgetFocused"
+      },
+      {
+        "command": "mars.noop",
+        "key": "ctrl+z",
+        "mac": "cmd+z",
+        "when": "activeCustomEditorId == 'mars.editor' && !webviewFindWidgetFocused"
+      },
+      {
+        "command": "mars.noop",
+        "key": "ctrl+y",
+        "mac": "cmd+y",
+        "when": "activeCustomEditorId == 'mars.editor' && !webviewFindWidgetFocused"
+      },
+      {
+        "command": "mars.noop",
+        "key": "ctrl+shift+z",
+        "mac": "cmd+shift+z",
+        "when": "activeCustomEditorId == 'mars.editor' && !webviewFindWidgetFocused"
+      },
+      {
+        "command": "mars.noop",
+        "key": "ctrl+a",
+        "mac": "cmd+a",
+        "when": "activeCustomEditorId == 'mars.editor' && !webviewFindWidgetFocused"
+      }
+    ],
+    "configuration": {
+      "title": "Mars",
+      "properties": {
+        "mars.scrollSync": {
+          "type": "boolean",
+          "default": true,
+          "description": "Sincroniza el desplazamiento del editor visual con el editor de código."
+        },
+        "mars.hyphenation": {
+          "type": "boolean",
+          "default": true,
+          "description": "Parte las palabras con guion al final de línea, como hace LaTeX al justificar (por ahora en documentos en español). Así los párrafos ocupan las mismas líneas que en el PDF."
+        },
+        "mars.openInVisualEditor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Con un editor visual de Mars abierto, los demás .tex que abras se muestran también en el editor visual (al lado del código si los tienes en columnas distintas)."
+        },
+        "mars.landscapePages": {
+          "type": "string",
+          "enum": [
+            "edit",
+            "pdf",
+            "rotated",
+            "upright"
+          ],
+          "enumDescriptions": [
+            "Como en el PDF mientras no se toca; al editarla se pone derecha y al salir vuelve a girarse",
+            "Como en el PDF: con lscape la hoja sigue vertical y el contenido va girado; con pdflscape la hoja se ve apaisada",
+            "Siempre como al imprimir: hoja vertical con el contenido girado 90°",
+            "Siempre derecho: el contenido en una hoja apaisada, más cómodo para leer y editar"
+          ],
+          "default": "edit",
+          "description": "Cómo se ven en el editor visual las hojas horizontales (\\begin{landscape})."
+        },
+        "mars.spellCheck.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Subraya en el editor visual las palabras que no están en el diccionario."
+        },
+        "mars.spellCheck.language": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "es",
+            "en",
+            "es+en"
+          ],
+          "enumDescriptions": [
+            "El idioma declarado en el documento con babel; si no hay, el de VS Code",
+            "Español",
+            "Inglés",
+            "Español e inglés a la vez"
+          ],
+          "default": "auto",
+          "description": "Idioma del corrector ortográfico."
+        },
+        "mars.zotero.url": {
+          "type": "string",
+          "default": "http://127.0.0.1:23119",
+          "description": "Dirección local de Zotero (con el complemento Better BibTeX) para elegir citas desde el editor visual."
+        },
+        "mars.pdf.command": {
+          "type": "string",
+          "default": "",
+          "description": "Orden con la que compilar el PDF (con %DOC% donde va el archivo), por ejemplo «latexmk -xelatex %DOC%». Vacío: Mars usa latexmk, tectonic o el motor que pida el documento, lo que encuentre instalado."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p . && node esbuild.mjs",
+    "watch": "tsc -w -p .",
+    "test:unit": "node --test \"out/test/unit/**/*.test.js\"",
+    "test:e2e": "node out/test/e2e/runTest.js",
+    "test:ui": "node out/test/ui/suite.js",
+    "test:vsix": "node out/test/ui/vsix.js",
+    "test": "npm run compile && npm run test:unit && npm run test:e2e && npm run test:ui",
+    "vscode:prepublish": "npm run compile",
+    "package": "npx @vscode/vsce package --no-dependencies --out releases/"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/codicons": "^0.0.46-24",
+    "@vscode/test-electron": "^3.1.0",
+    "dictionary-en": "^4.0.0",
+    "dictionary-es": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "hyphen": "^1.14.1",
+    "jsdom": "^30.1.1",
+    "katex": "^0.16.11",
+    "mathlive": "^0.111.0",
+    "node-tikzjax": "^1.0.5",
+    "nspell": "^2.1.5",
+    "pdfjs-dist": "^6.3.289",
+    "playwright-core": "^1.63.0",
+    "typescript": "^5.6.0"
+  }
+}

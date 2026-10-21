@@ -1,0 +1,11 @@
+node_modules/
+out/
+# generado por esbuild.mjs
+dist/
+dict/
+tex/
+media/preview.js
+media/vendor/
+*.vsix
+.vscode-test/
+tools/capturas/

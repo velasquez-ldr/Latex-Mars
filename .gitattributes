@@ -1,0 +1,9 @@
+# Finales de línea LF en el repositorio y en la carpeta de trabajo, se clone en Linux o en Windows
+# (la carpeta del proyecto se comparte entre los dos sistemas)
+* text=auto eol=lf
+
+# binarios: sin conversión de finales de línea
+*.png binary
+*.ttf binary
+*.woff2 binary
+*.vsix binary

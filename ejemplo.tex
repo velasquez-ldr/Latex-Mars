@@ -1,0 +1,83 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+
+\newcommand{\R}{\mathbb{R}}
+\newtheorem{teorema}{Teorema}
+
+\title{Mars: LaTeX sin compilar}
+\author{Tu nombre}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Este documento muestra lo que el editor visual sabe dibujar. Haz clic en cualquier texto y
+escribe encima, como en un procesador de textos: el archivo \texttt{.tex} se actualiza solo.
+\end{abstract}
+
+\tableofcontents
+
+\section{Texto} \label{sec:texto}
+
+Un párrafo con \textbf{negrita}, \textit{cursiva}, \underline{subrayado} y \texttt{código}.
+Los acentos funcionan: canción, niño, ¿qué tal? % este comentario no se pierde al editar
+También las comillas ``dobles'', los guiones -- y --- y los símbolos 50\% y \$10.
+
+Una fórmula en línea como $e^{i\pi} + 1 = 0$ se edita con doble clic. Mira la
+sección~\ref{sec:mates} y la ecuación~\eqref{eq:gauss}\footnote{Las notas al pie se juntan al final.}.
+
+\subsection{Listas}
+
+\begin{itemize}
+  \item Primer elemento
+  \item Segundo elemento con $x \in \R$
+  \begin{enumerate}
+    \item Anidado uno
+    \item Anidado dos
+  \end{enumerate}
+\end{itemize}
+
+\section{Matemáticas} \label{sec:mates}
+
+\begin{equation} \label{eq:gauss}
+  \int_{-\infty}^{\infty} e^{-x^2} \, dx = \sqrt{\pi}
+\end{equation}
+
+\begin{align}
+  (a+b)^2 &= a^2 + 2ab + b^2 \\
+  (a-b)^2 &= a^2 - 2ab + b^2
+\end{align}
+
+\begin{teorema}[Pitágoras]
+En un triángulo rectángulo, $a^2 + b^2 = c^2$.
+\end{teorema}
+
+\section{Tablas y código}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{|l|c|r|}
+    \hline
+    \textbf{Planeta} & \textbf{Lunas} & \textbf{Radio (km)} \\
+    \hline
+    Tierra & 1 & 6371 \\
+    \hline
+    Marte & 2 & 3390 \\
+    \hline
+  \end{tabular}
+  \caption{Dos planetas rocosos}
+  \label{tab:planetas}
+\end{table}
+
+\begin{verbatim}
+def hola():
+    print("Hola, Marte")
+\end{verbatim}
+
+\end{document}
