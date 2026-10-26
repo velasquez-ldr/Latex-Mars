@@ -2,7 +2,7 @@
   "name": "latex-mars",
   "displayName": "LaTeX Mars",
   "description": "Editor visual (WYSIWYM) de LaTeX: escribe sobre el documento como en Word, sin compilar a PDF",
-  "version": "0.30.0",
+  "version": "0.30.1",
   "publisher": "lider-mars",
   "license": "MIT",
   "repository": {
@@ -284,7 +284,7 @@
     "esbuild": "^0.28.2",
     "hyphen": "^1.14.1",
     "jsdom": "^30.1.1",
-    "katex": "^0.16.11",
+    "katex": "^0.19.1",
     "mathlive": "^0.111.0",
     "node-tikzjax": "^1.0.5",
     "nspell": "^2.1.5",

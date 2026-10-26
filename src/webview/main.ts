@@ -1,4 +1,6 @@
 import { caretOffset, caretToEnd, offsetOf, pointAt, setCaretOffset, units, wrapRange } from './caret';
+import { CITE, citesIn, removeCite } from './cites';
+import { type CoverText, type DeckOptions, type DeckSection, type Slide, CLOSING_DEFAULTS, DECK_DEFAULTS, buildSlides, closingHtml, coverHtml, coverOf, isDeckOpen, openDeck, plainOf, slideHtml } from './deck';
 import { GALLERY, PALETTE, closeDialog, fillDialog, formulaProbe, isDialogOpen, openForm, openFormula, renderMath, setMathContext } from './dialogs';
 import { diffWords } from '../diff';
 import { calc } from '../latex/expand';
@@ -201,6 +203,8 @@ interface Prefs {
   colors?: string[];
   view?: 'page' | 'flow';
   zoom?: number | 'fit' | 'sheet';
+  /** cómo se hacen las presentaciones: qué incluyen y con qué estilo */
+  deck?: Partial<DeckOptions>;
 }
 const prefs: Prefs = ((): Prefs => {
   const old = (vscode.getState() as Prefs | undefined) ?? {};
@@ -211,6 +215,16 @@ const prefs: Prefs = ((): Prefs => {
   }
 })();
 const savePrefs = (patch: Prefs): void => post({ type: 'prefs', patch });
+/** qué llevan las presentaciones (panel lateral, cara «Presentación») */
+let deckOpts: DeckOptions = { ...DECK_DEFAULTS, ...(prefs.deck ?? {}) };
+/** textos propios de la portada de la presentación de este documento (los guarda la extensión) */
+let deckCoverText: CoverText = ((): CoverText => {
+  try {
+    return JSON.parse(document.body.dataset.cover ?? '{}') as CoverText;
+  } catch {
+    return {};
+  }
+})();
 /** color del papel en la vista de página: no cambia el documento, solo cómo se ve al escribir */
 type Paper = 'white' | 'sepia' | 'dark';
 let paper: Paper = prefs.paper === 'sepia' || prefs.paper === 'dark' ? prefs.paper : 'white';
@@ -3622,6 +3636,11 @@ const COMMANDS: Record<string, (arg?: string) => void> = {
     if (navOpen && navMode === 'refs') run('nav');
     else setNavMode('refs');
   },
+  'deck-panel': () => {
+    if (navOpen && navMode === 'deck') run('nav');
+    else setNavMode('deck');
+  },
+  present: (from) => present(from),
   git: () => toggleGit(),
   case: (mode) => changeCase(mode ?? 'upper'),
   paper: (kind) => {
@@ -4276,7 +4295,12 @@ function buildToolbar(): void {
         big('paper', 'coffee', 'Sepia', 'Papel cálido, más descansado para leer', 'sepia') +
         big('paper', 'color-mode', 'Oscuro', 'Hoja oscura para escribir de noche (el documento no cambia)', 'dark'),
     ) +
-    group('Código', big('goto', 'go-to-file', 'Ver código', 'Ir a esta línea en el editor de código'));
+    group(
+      'Presentación',
+      big('present', 'play', 'Presentar', 'Proyectar en 16:9 los apartados elegidos, como diapositivas hechas solas a partir del documento') +
+        big('deck-panel', 'checklist', 'Elegir', 'Elegir en el panel lateral qué apartados entran en la presentación y qué llevan'),
+    ) +
+    group('Código',big('goto', 'go-to-file', 'Ver código', 'Ir a esta línea en el editor de código'));
 
   const table =
     group('Filas y columnas', big('table', 'add', 'Fila', 'Añadir fila debajo', 'row+') + big('table', 'add', 'Columna', 'Añadir columna a la derecha', 'col+')) +
@@ -4377,6 +4401,10 @@ function applyPrefs(p: Prefs): void {
   if (p.zoom !== undefined && p.zoom !== zoom && (p.zoom === 'fit' || p.zoom === 'sheet' || (typeof p.zoom === 'number' && p.zoom >= 0.15 && p.zoom <= 2.5))) {
     zoom = p.zoom;
     applyZoom();
+  }
+  if (p.deck && JSON.stringify(p.deck) !== JSON.stringify(deckOpts)) {
+    deckOpts = { ...DECK_DEFAULTS, ...p.deck };
+    if (navOpen && navMode === 'deck') updateOutline();
   }
 }
 
@@ -6117,6 +6145,24 @@ function navDocked(): boolean {
 let currentPage = 1;
 const HEAD_LEVEL: Record<string, number> = { part: 0, chapter: 0, section: 1, subsection: 2, subsubsection: 3 };
 
+/** Texto de un título, sin su número ni lo que no se escribe. */
+const headText = (head: HTMLElement): string =>
+  Array.from(head.childNodes).filter((n) => !(n.nodeType === 1 && (n as Element).hasAttribute('data-skip'))).map((n) => n.textContent).join('').trim() || 'Sin título';
+/** Un apartado se reconoce por su número y su título: así sobrevive a los repintados. */
+const headKey = (num: string, text: string): string => `${num}|${text}`;
+/** apartados plegados en el esquema */
+const navShut = new Set<string>();
+/** cara del panel que se dibujó la última vez: al volver a dibujar la misma, la lista no salta */
+let navShown = '';
+
+/** Rellena el panel conservando su desplazamiento si sigue en la misma cara. */
+function setNav(html: string): void {
+  const top = navShown === navMode ? navEl.scrollTop : 0;
+  navEl.innerHTML = html;
+  navEl.scrollTop = top;
+  navShown = navMode;
+}
+
 /** Esquema del documento: un botón por título, sangrado según su nivel. */
 function updateOutline(): void {
   if (document.body.classList.contains('nav-open') !== navOpen) {
@@ -6129,6 +6175,10 @@ function updateOutline(): void {
     renderRefs();
     return;
   }
+  if (navMode === 'deck') {
+    renderDeckPanel();
+    return;
+  }
   const items: { i: number; level: number; num: string; text: string; words: number }[] = [];
   const count = (el: BlockEl): number => (el._b?.kind === 'ro' ? 0 : (content(el).textContent ?? '').replace(/\u00AD/g, '').split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length);
   els.forEach((el, i) => {
@@ -6137,48 +6187,81 @@ function updateOutline(): void {
     if (items.length && !c.querySelector(':scope > [data-k="head"]')) items[items.length - 1].words += count(el);
     const head = c.querySelector(':scope > [data-k="head"]') as HTMLElement | null;
     if (head) {
-      const text = Array.from(head.childNodes).filter((n) => !(n.nodeType === 1 && (n as Element).hasAttribute('data-skip'))).map((n) => n.textContent).join('');
-      items.push({ i, level: HEAD_LEVEL[head.dataset.level ?? ''] ?? 1, num: head.querySelector('.secnum')?.textContent ?? '', text: text.trim() || 'Sin título', words: 0 });
+      items.push({ i, level: HEAD_LEVEL[head.dataset.level ?? ''] ?? 1, num: head.querySelector('.secnum')?.textContent ?? '', text: headText(head), words: 0 });
     } else if (c.querySelector(':scope > .titleblock')) {
       items.push({ i, level: -1, num: '', text: c.querySelector('.doctitle')?.textContent?.trim() || 'Título', words: 0 });
     }
   });
   const base = Math.min(...items.filter((x) => x.level >= 0).map((x) => x.level), 3);
-  navEl.innerHTML =
+  const most = Math.max(...items.map((y) => y.words), 1);
+  // un título con otros más hondos debajo se puede plegar; lo de debajo de uno plegado no se ve
+  const open: { level: number; shut: boolean }[] = [];
+  const kids = (k: number): boolean => items[k].level >= 0 && (items[k + 1]?.level ?? -1) > items[k].level;
+  const rows = items.map((x, k) => {
+    while (open.length && open[open.length - 1].level >= x.level) open.pop();
+    const hidden = open.some((a) => a.shut);
+    const key = headKey(x.num, x.text);
+    const shut = kids(k) && navShut.has(key);
+    open.push({ level: x.level, shut });
+    const fold = x.level < 0 ? '' : kids(k) ? `<span class="nav-fold codicon codicon-chevron-${shut ? 'right' : 'down'}" data-fold="${escHtml(key)}" title="${shut ? 'Desplegar' : 'Plegar'}"></span>` : '<span class="nav-fold"></span>';
+    return `<button class="nav-item nav-l${x.level < 0 ? 't' : x.level - base}" data-i="${x.i}" style="--w:${(x.words / most).toFixed(2)}"${hidden ? ' hidden' : ''}>${fold}<span class="nav-num">${escHtml(x.num)}</span><span class="nav-text">${escHtml(x.text)}</span>${x.words ? `<span class="nav-words" title="Palabras de este apartado">${x.words}</span>` : ''}</button>`;
+  });
+  const folds = items.some((_, k) => kids(k));
+  setNav(
     navHead() +
-    (items.length
-      ? `<div class="nav-list">${items
-          .map((x) => `<button class="nav-item nav-l${x.level < 0 ? 't' : x.level - base}" data-i="${x.i}" style="--w:${(x.words / Math.max(...items.map((y) => y.words), 1)).toFixed(2)}"><span class="nav-num">${escHtml(x.num)}</span><span class="nav-text">${escHtml(x.text)}</span>${x.words ? `<span class="nav-words" title="Palabras de este apartado">${x.words}</span>` : ''}</button>`)
-          .join('')}</div>`
-      : '<div class="nav-empty">Los títulos del documento aparecerán aquí.<br>Usa los estilos <b>Título 1</b>, <b>Título 2</b>… de la pestaña Inicio.</div>');
+      (items.length
+        ? (folds ? '<div class="nav-tools"><button data-fold-all="1" title="Ver solo los títulos del primer nivel">Plegar todo</button><button data-fold-all="0" title="Ver todos los títulos">Desplegar todo</button></div>' : '') +
+          `<div class="nav-list">${rows.join('')}</div>`
+        : '<div class="nav-empty">Los títulos del documento aparecerán aquí.<br>Usa los estilos <b>Título 1</b>, <b>Título 2</b>… de la pestaña Inicio.</div>'),
+  );
   trackScroll();
 }
 
-// ---- el panel tiene dos caras: el esquema del documento y sus referencias bibliográficas
-let navMode: 'outline' | 'refs' = 'outline';
+/** Pliega (o despliega) todos los títulos que tienen otros debajo. */
+function foldAll(shut: boolean): void {
+  navShut.clear();
+  if (shut) {
+    const heads = els.map((el) => content(el).querySelector(':scope > [data-k="head"]') as HTMLElement | null).filter((h): h is HTMLElement => h !== null);
+    const level = (h: HTMLElement): number => HEAD_LEVEL[h.dataset.level ?? ''] ?? 1;
+    heads.forEach((h, k) => {
+      if (heads[k + 1] && level(heads[k + 1]) > level(h)) navShut.add(headKey(h.querySelector('.secnum')?.textContent ?? '', headText(h)));
+    });
+  }
+  updateOutline();
+}
+
+// ---- el panel tiene tres caras: el esquema del documento, sus referencias bibliográficas y la presentación
+type NavMode = 'outline' | 'refs' | 'deck';
+let navMode: NavMode = 'outline';
 /** lo escrito en el buscador de referencias */
 let refFilter = '';
 /** referencia que espera la confirmación para quitarla */
 let refAsk = '';
+/** orden de la lista de referencias */
+let refSort: 'doc' | 'az' | 'cited' | 'unused' = 'doc';
 
 function navHead(): string {
-  const tab = (mode: string, label: string, title: string): string => `<button class="nav-tab${navMode === mode ? ' on' : ''}" data-mode="${mode}" title="${title}">${label}</button>`;
+  // la cara elegida lleva su nombre; las otras, solo su icono (el panel es estrecho)
+  const tab = (mode: NavMode, icon: string, label: string, title: string): string =>
+    `<button class="nav-tab${navMode === mode ? ' on' : ''}" data-mode="${mode}" title="${title}"><i class="codicon codicon-${icon}"></i><span>${label}</span></button>`;
   return (
-    `<div class="nav-head"><span class="nav-tabs">${tab('outline', 'Esquema', 'Los títulos del documento')}${tab('refs', 'Referencias', 'Las fuentes bibliográficas: añadir, editar, quitar y citar')}</span>` +
-    '<button data-cmd="nav" title="Cerrar el panel"><i class="codicon codicon-close"></i></button></div>'
+    '<div class="nav-head"><span class="nav-tabs">' +
+    tab('outline', 'list-tree', 'Esquema', 'Esquema: los títulos del documento') +
+    tab('refs', 'book', 'Referencias', 'Referencias: las fuentes bibliográficas; añadir, editar, quitar y citar') +
+    tab('deck', 'play', 'Presentación', 'Presentación: elegir apartados y proyectarlos en 16:9') +
+    '</span><button data-cmd="nav" title="Cerrar el panel"><i class="codicon codicon-close"></i></button></div>'
   );
 }
 
 /** Claves citadas en el documento: cuántas veces y en qué bloque aparece cada una por primera vez. */
 function citations(): Map<string, { n: number; first: number }> {
   const found = new Map<string, { n: number; first: number }>();
-  const CITE = /\\(?:[a-zA-Z]*cite[a-zA-Z]*|nocite)\*?\s*(?:\[[^\]]*\]\s*)*\{([^}]*)\}/g;
   blocks.forEach((b, i) => {
     if (b.kind === 'ro' || els[i]?.classList.contains('is-preamble')) return;
     // (la propia lista de referencias no cuenta como cita)
     const src = b.src.replace(/\\begin\{thebibliography\}[\s\S]*?\\end\{thebibliography\}/g, '');
-    for (const m of src.matchAll(CITE)) {
-      for (const key of m[1].split(',').map((k) => k.trim()).filter(Boolean)) {
+    for (const m of citesIn(src)) {
+      for (const key of m.keys) {
         const c = found.get(key);
         if (c) c.n++;
         else found.set(key, { n: 1, first: i });
@@ -6199,39 +6282,66 @@ function renderRefs(): void {
   const unused = sources.filter((s) => !cited.has(s.key)).length;
   const missing = [...cited.keys()].filter((k) => k !== '*' && !known.has(k));
   const q = plainQuery();
+  const times = (n: number): string => `${n} ${n === 1 ? 'cita' : 'citas'}`;
+  /** «2 de 3» mientras se recorren las citas de una fuente */
+  const here = (key: string): boolean => refTurn?.key === key && refTurn.at >= 0 && !refTurn.done;
+  const counter = (key: string, n: number): string => (here(key) && refTurn && n > 1 ? `${refTurn.at + 1} de ${n}` : times(n));
+  /** se ha ido a una de sus citas: se puede quitar esa, y solo esa */
+  const uncite = (key: string): string =>
+    here(key) ? '<button data-ref="uncite" title="Quitar del texto la cita a la que se acaba de ir (la fuente sigue en la bibliografía)"><i class="codicon codicon-circle-slash"></i></button>' : '';
   const item = (s: (typeof sources)[number]): string => {
     const c = cited.get(s.key);
     const asking = refAsk === s.key;
     return (
-      `<div class="ref-item${c ? '' : ' unused'}${refMatches(s, q) ? '' : ' out'}${refTurn?.key === s.key ? ' on' : ''}" data-key="${escHtml(s.key)}" data-n="${c ? `${c.n} ${c.n === 1 ? 'cita' : 'citas'}` : 'sin citar'}">` +
+      `<div class="ref-item${c ? '' : ' unused'}${refMatches(s, q) ? '' : ' out'}${refTurn?.key === s.key ? ' on' : ''}" data-key="${escHtml(s.key)}" data-n="${c ? times(c.n) : 'sin citar'}">` +
       `<button class="ref-main" data-ref="go" title="${c ? (c.n > 1 ? 'Ir a sus citas en el documento: cada clic lleva a la siguiente' : 'Ir a su cita en el documento') : 'Todavía no se cita en el documento'}">` +
-      `<span class="ref-key">${escHtml(s.key)}</span><span class="ref-count" title="Veces que se cita">${c ? `${c.n} ${c.n === 1 ? 'cita' : 'citas'}` : 'sin citar'}</span>` +
+      `<span class="ref-key">${escHtml(s.key)}</span><span class="ref-count" title="Veces que se cita">${c ? counter(s.key, c.n) : 'sin citar'}</span>` +
       `<span class="ref-label">${escHtml(s.label)}</span></button>` +
       (asking
         ? `<div class="ref-ask"><span>${c ? `Se cita ${c.n} ${c.n === 1 ? 'vez' : 'veces'}: esas citas quedarán sin referencia. ` : ''}¿Quitarla?</span><button data-ref="yes" class="danger">Quitar</button><button data-ref="no">Cancelar</button></div>`
         : '<div class="ref-acts">' +
+          uncite(s.key) +
           '<button data-ref="cite" title="Citarla donde está el cursor"><i class="codicon codicon-quote"></i></button>' +
           '<button data-ref="edit" title="Editar sus datos"><i class="codicon codicon-edit"></i></button>' +
           '<button data-ref="del" title="Quitarla de la bibliografía"><i class="codicon codicon-trash"></i></button></div>') +
       '</div>'
     );
   };
-  navEl.innerHTML =
+  const order = (): typeof sources => {
+    const n = (s: (typeof sources)[number]): number => cited.get(s.key)?.n ?? 0;
+    if (refSort === 'az') return [...sources].sort((a, b) => a.key.localeCompare(b.key, 'es'));
+    if (refSort === 'cited') return [...sources].sort((a, b) => n(b) - n(a));
+    if (refSort === 'unused') return [...sources].sort((a, b) => Number(n(a) > 0) - Number(n(b) > 0));
+    return sources;
+  };
+  const sortBox =
+    `<select class="ref-sort" title="Orden de la lista">${(
+      [['doc', 'Como en la bibliografía'], ['az', 'Por clave (A → Z)'], ['cited', 'Más citadas primero'], ['unused', 'Sin citar primero']] as const
+    )
+      .map(([v, label]) => `<option value="${v}"${refSort === v ? ' selected' : ''}>${label}</option>`)
+      .join('')}</select>`;
+  setNav(
     navHead() +
-    '<div class="ref-tools">' +
-    '<button data-cmd="add-source" title="Agregar una fuente escribiendo sus datos"><i class="codicon codicon-add"></i>Añadir</button>' +
-    '<button data-cmd="add-doi" title="Traer una fuente de doi.org por su DOI"><i class="codicon codicon-link-external"></i>DOI</button>' +
-    '<button data-cmd="cite-zotero" title="Elegir referencias en Zotero"><i class="codicon codicon-folder-library"></i>Zotero</button></div>' +
-    (sources.length
-      ? `<input class="ref-search" type="search" placeholder="Buscar por autor, título o clave…" value="${escHtml(refFilter)}" spellcheck="false">` +
-        `<div class="ref-sum">${sources.length} ${sources.length === 1 ? 'referencia' : 'referencias'}${unused ? ` · ${unused} sin citar` : ''}</div>` +
-        `<div class="ref-list">${sources.map(item).join('')}</div>`
-      : '<div class="nav-empty">Este documento aún no tiene referencias.<br>Añade la primera con <b>Añadir</b>, con su <b>DOI</b> o desde <b>Zotero</b>.</div>') +
-    (missing.length
-      ? `<div class="ref-sum warn">Citas sin referencia</div><div class="ref-list">${missing
-          .map((k) => `<div class="ref-item missing" data-key="${escHtml(k)}"><button class="ref-main" data-ref="go" title="Ir a la cita"><span class="ref-key">${escHtml(k)}</span><span class="ref-count">${cited.get(k)?.n ?? 0} ${cited.get(k)?.n === 1 ? 'cita' : 'citas'}</span><span class="ref-label">No está en la bibliografía</span></button></div>`)
-          .join('')}</div>`
-      : '');
+      '<div class="ref-tools">' +
+      '<button data-cmd="add-source" title="Agregar una fuente escribiendo sus datos"><i class="codicon codicon-add"></i>Añadir</button>' +
+      '<button data-cmd="add-doi" title="Traer una fuente de doi.org por su DOI"><i class="codicon codicon-link-external"></i>DOI</button>' +
+      '<button data-cmd="cite-zotero" title="Elegir referencias en Zotero"><i class="codicon codicon-folder-library"></i>Zotero</button></div>' +
+      (sources.length
+        ? `<input class="ref-search" type="search" placeholder="Buscar por autor, título o clave…" value="${escHtml(refFilter)}" spellcheck="false">` +
+          `<div class="ref-bar"><span class="ref-sum">${sources.length} ${sources.length === 1 ? 'referencia' : 'referencias'}${unused ? ` · ${unused} sin citar` : ''}</span>${sources.length > 1 ? sortBox : ''}</div>` +
+          `<div class="ref-list">${order().map(item).join('')}</div>`
+        : '<div class="nav-empty">Este documento aún no tiene referencias.<br>Añade la primera con <b>Añadir</b>, con su <b>DOI</b> o desde <b>Zotero</b>.</div>') +
+      (missing.length
+        ? `<div class="ref-sum warn">Citas sin referencia</div><div class="ref-list">${missing
+            .map(
+              (k) =>
+                `<div class="ref-item missing${refTurn?.key === k ? ' on' : ''}" data-key="${escHtml(k)}" data-n="${times(cited.get(k)?.n ?? 0)}"><button class="ref-main" data-ref="go" title="Ir a la cita"><span class="ref-key">${escHtml(k)}</span><span class="ref-count">${counter(k, cited.get(k)?.n ?? 0)}</span><span class="ref-label">No está en la bibliografía</span></button>` +
+                (uncite(k) ? `<div class="ref-acts">${uncite(k)}</div>` : '') +
+                '</div>',
+            )
+            .join('')}</div>`
+        : ''),
+  );
   if (typing) {
     // el documento se ha redibujado mientras se escribía en el buscador: el cursor sigue en él
     const box = navEl.querySelector<HTMLInputElement>('.ref-search');
@@ -6240,7 +6350,7 @@ function renderRefs(): void {
   }
 }
 
-function setNavMode(mode: 'outline' | 'refs'): void {
+function setNavMode(mode: NavMode): void {
   navMode = mode;
   refAsk = '';
   if (!navOpen) run('nav');
@@ -6260,11 +6370,10 @@ navEl.addEventListener('input', (e) => {
 });
 
 /** por qué cita de qué fuente va el recorrido del panel */
-let refTurn: { key: string; at: number } | undefined;
+let refTurn: { key: string; at: number; done?: boolean } | undefined;
 
 /** Cada sitio del documento donde se cita `key`, en orden (una cita con varias claves cuenta para cada una). */
 function citeSpots(key: string): HTMLElement[] {
-  const CITE = /\\(?:[a-zA-Z]*cite[a-zA-Z]*|nocite)\*?\s*(?:\[[^\]]*\]\s*)*\{([^}]*)\}/g;
   return Array.from(root.querySelectorAll<HTMLElement>('[data-tex*="cite"]')).filter((a) => {
     if (a.closest('.bib, .is-preamble') || a.querySelector('[data-tex*="cite"]')) return false;
     return [...(a.getAttribute('data-tex') ?? '').matchAll(CITE)].some((m) => m[1].split(',').some((k) => k.trim() === key));
@@ -6274,6 +6383,8 @@ function citeSpots(key: string): HTMLElement[] {
 /** Lo que hace cada botón de una referencia del panel. */
 function refAction(act: string, key: string): void {
   const s = sources.find((x) => x.key === key);
+  // hacer algo con otra fuente termina el recorrido por las citas de la anterior
+  if (refTurn && refTurn.key !== key) refTurn = undefined;
   if (act === 'go') {
     // cada clic lleva a la cita siguiente de esa fuente, y tras la última vuelve a la primera
     const spots = citeSpots(key);
@@ -6283,7 +6394,8 @@ function refAction(act: string, key: string): void {
       post({ type: 'info', text: `«${key}» todavía no se cita en el documento. Pon el cursor donde la quieras y pulsa el botón de citar.` });
       return;
     }
-    refTurn = refTurn?.key === key && spots.length ? { key, at: (refTurn.at + 1) % spots.length } : { key, at: 0 };
+    // (sin un sitio concreto al que ir no hay «esta cita» que quitar: -1)
+    refTurn = refTurn?.key === key && spots.length ? { key, at: (refTurn.at + 1) % spots.length } : { key, at: spots.length ? 0 : -1 };
     const spot = spots[refTurn.at] as HTMLElement | undefined;
     const target = spot ?? (fallback as HTMLElement);
     const box = vrect(target);
@@ -6295,15 +6407,31 @@ function refAction(act: string, key: string): void {
       spot.classList.add('cite-here');
       window.setTimeout(() => spot.classList.remove('cite-here'), 2600);
     }
-    // en el panel, por cuál va: «2 de 3»
-    navEl.querySelectorAll<HTMLElement>('.ref-item').forEach((it) => {
-      const count = it.querySelector('.ref-count');
-      const mine = it.dataset.key === key;
-      it.classList.toggle('on', mine);
-      if (count && mine && spots.length > 1) count.textContent = `${refTurn ? refTurn.at + 1 : 1} de ${spots.length}`;
-      else if (count && it.dataset.n) count.textContent = it.dataset.n;
-    });
+    // en el panel, por cuál va («2 de 3») y el botón para quitar esa cita
+    renderRefs();
     if (!navDocked() && spots.length <= 1) run('nav');
+  } else if (act === 'uncite' && !readOnly && refTurn?.key === key && refTurn.at >= 0 && !refTurn.done) {
+    // quitar del texto la cita a la que se ha ido, sin tocar la bibliografía
+    const spots = citeSpots(key);
+    const spot = spots[refTurn.at] as HTMLElement | undefined;
+    const el = spot?.closest('.block') as BlockEl | null | undefined;
+    if (!spot || !el) return;
+    if (active) flush(active);
+    const r = blockRange(el);
+    const next = r ? removeCite(r.src, key, spots.filter((x) => x.closest('.block') === el).indexOf(spot)) : undefined;
+    if (!r || next === undefined) {
+      post({ type: 'info', text: `No se encuentra esa cita de «${key}» en el código del bloque: quítala desde el código.` });
+      return;
+    }
+    dropActive();
+    nextFocus = undefined;
+    // el siguiente clic en la fuente lleva a la cita que venía detrás de la quitada
+    refTurn = { key, at: refTurn.at - 1, done: true };
+    if (next.trim()) sendFull(r.s, r.lines, next.split('\n'));
+    else {
+      const gone = removal(r);
+      sendFull(r.s, gone.expect, gone.lines);
+    }
   } else if (act === 'cite' && !readOnly) run('cite', key);
   else if (act === 'del' || act === 'no') {
     refAsk = act === 'del' ? key : '';
@@ -6325,9 +6453,225 @@ function refAction(act: string, key: string): void {
   }
 }
 
+// ---- la tercera cara: una presentación hecha sola con los apartados que se elijan
+
+/** apartados que no entran en la presentación (los nuevos entran solos) */
+const deckOff = new Set<string>();
+
+/** Apartados del documento, cada uno con lo que hay entre su título y el siguiente. */
+function deckSections(all = false): DeckSection[] {
+  const out: DeckSection[] = [];
+  let cur: DeckSection | undefined;
+  for (const el of els) {
+    if (el.classList.contains('is-preamble') || el._b?.kind === 'ro') continue;
+    const c = content(el);
+    const head = c.querySelector(':scope > [data-k="head"]') as HTMLElement | null;
+    if (!head) {
+      cur?.blocks.push(c);
+      continue;
+    }
+    const num = head.querySelector('.secnum')?.textContent ?? '';
+    const title = headText(head);
+    cur = { key: headKey(num, title), num, title, level: HEAD_LEVEL[head.dataset.level ?? ''] ?? 1, blocks: [] };
+    out.push(cur);
+  }
+  // el nivel más alto del documento es el 0: en un artículo, las secciones
+  const base = Math.min(...out.map((s) => s.level), 3);
+  for (const s of out) s.level -= base;
+  return all ? out : out.filter((s) => !deckOff.has(s.key));
+}
+
+/** La portada del documento (\maketitle), si la tiene. */
+const deckCover = (): HTMLElement | undefined =>
+  els.map((el) => content(el).querySelector<HTMLElement>('div.titleblock[data-role="title"]')).find((x): x is HTMLElement => x !== null);
+
+/** Proyecta la presentación (desde el apartado `from`, si se da). */
+function present(from?: string): void {
+  if (active) deactivate();
+  const cover = deckCover();
+  const sections = deckSections();
+  const slides = sections.length ? buildSlides(sections, deckOpts, cover, deckCoverText) : [];
+  if (!slides.length) {
+    post({ type: 'info', text: 'No hay nada que presentar: elige algún apartado en el panel lateral (cara «Presentación»).' });
+    return;
+  }
+  const start = from ? Math.max(slides.findIndex((x) => x.key === from), 0) : 0;
+  // toda la pantalla, como en PowerPoint: la ventana la prepara la extensión
+  post({ type: 'presentMode', on: true });
+  openDeck(slides, deckOpts, deckFooter(), start, () => post({ type: 'presentMode', on: false }));
+}
+
+let deckCountTimer = 0;
+/** Cuántas diapositivas saldrían (se calcula aparte: copiar el documento cuesta). */
+function countSlides(): void {
+  window.clearTimeout(deckCountTimer);
+  deckCountTimer = window.setTimeout(() => {
+    const sum = navEl.querySelector('.deck-sum');
+    if (!sum || navMode !== 'deck') return;
+    const all = deckSections(true);
+    const on = all.filter((s) => !deckOff.has(s.key));
+    const n = on.length ? buildSlides(on, deckOpts, deckCover(), deckCoverText).length : 0;
+    sum.textContent = `${n} ${n === 1 ? 'diapositiva' : 'diapositivas'} · ${on.length} de ${all.length} apartados`;
+  }, 200);
+}
+
+/** Pie de las diapositivas: el título de la portada, el propio o el del documento. */
+const deckFooter = (): string => deckCoverText.title ?? plainOf(coverOf(deckCover()).title, document);
+
+/** Una diapositiva en pequeño, con el estilo elegido (para la vista previa de los formularios). */
+const deckPreview = (slide: Slide): string =>
+  `<div class="deck-vars deck-${deckOpts.theme} deck-preview"><div class="deck-preview-in">${slideHtml(slide, 0, 1, deckFooter())}</div></div>`;
+
+/** Textos de la portada: los que se dejan como en el documento siguen al documento. */
+function editCover(): void {
+  const cover = deckCover();
+  const doc = coverOf(cover);
+  const plain = (html: string): string => plainOf(html, document);
+  const fromDoc: Record<keyof CoverText, string> = { title: plain(doc.title), subtitle: '', author: plain(doc.author), institute: plain(doc.institute), date: plain(doc.date) };
+  const own = (v: Record<string, string>): CoverText => {
+    const out: CoverText = {};
+    for (const k of Object.keys(fromDoc) as (keyof CoverText)[]) if (v[k] !== undefined && v[k].trim() !== fromDoc[k]) out[k] = v[k].trim();
+    return out;
+  };
+  const value = (k: keyof CoverText): string => deckCoverText[k] ?? fromDoc[k];
+  form(
+    'Portada de la presentación',
+    [
+      { id: 'title', label: 'Título', value: value('title') },
+      { id: 'subtitle', label: 'Subtítulo', value: value('subtitle'), placeholder: 'Por ejemplo: Defensa del trabajo de fin de máster' },
+      { id: 'author', label: 'Autor', value: value('author') },
+      { id: 'institute', label: 'Institución o curso', value: value('institute'), placeholder: 'Universidad, facultad, asignatura…' },
+      { id: 'date', label: 'Fecha', value: value('date') },
+    ],
+    (v) => {
+      deckCoverText = own(v);
+      post({ type: 'deckCover', value: deckCoverText });
+      renderDeckPanel();
+    },
+    (v) => deckPreview({ kind: 'cover', title: '', num: '', points: [], html: coverHtml(cover, own(v)) }),
+  );
+}
+
+/** Textos del cierre (valen para todas las presentaciones); el contacto, por omisión, el autor. */
+function editClosing(): void {
+  const author = deckCoverText.author ?? plainOf(coverOf(deckCover()).author, document);
+  const end = deckOpts.end ?? {};
+  const own = (v: Record<string, string>): DeckOptions['end'] => {
+    const out: DeckOptions['end'] = {};
+    if (v.title.trim() !== CLOSING_DEFAULTS.title) out.title = v.title.trim();
+    if (v.subtitle.trim() !== CLOSING_DEFAULTS.subtitle) out.subtitle = v.subtitle.trim();
+    if (v.contact.trim() !== author) out.contact = v.contact.trim();
+    return out;
+  };
+  form(
+    'Cierre de la presentación',
+    [
+      { id: 'title', label: 'Título', value: end.title ?? CLOSING_DEFAULTS.title },
+      { id: 'subtitle', label: 'Subtítulo', value: end.subtitle ?? CLOSING_DEFAULTS.subtitle, placeholder: 'Vacío: sin subtítulo' },
+      { id: 'contact', label: 'Contacto o autor', value: end.contact ?? author, placeholder: 'Nombre, correo, web…' },
+    ],
+    (v) => {
+      deckOpts.end = own(v);
+      savePrefs({ deck: { ...deckOpts } });
+      renderDeckPanel();
+    },
+    (v) => {
+      const e = own(v);
+      return deckPreview({ kind: 'end', title: e.title ?? CLOSING_DEFAULTS.title, num: '', points: [], html: closingHtml(e, author) });
+    },
+  );
+}
+
+function renderDeckPanel(): void {
+  const all = deckSections(true);
+  const chip = (id: keyof DeckOptions, label: string, title: string): string =>
+    `<button class="deck-chip${deckOpts[id] ? ' on' : ''}" data-opt="${id}" title="${title}" aria-pressed="${deckOpts[id] ? 'true' : 'false'}">${label}</button>`;
+  const seg = (id: 'text' | 'theme', value: string, label: string, title: string): string =>
+    `<button class="deck-seg${deckOpts[id] === value ? ' on' : ''}" data-opt="${id}" data-val="${value}" title="${title}" aria-pressed="${deckOpts[id] === value ? 'true' : 'false'}">${label}</button>`;
+  const edit = (what: string, title: string): string => `<button class="deck-edit" data-deck-edit="${what}" title="${title}"><i class="codicon codicon-edit"></i></button>`;
+  const anyOn = all.some((s) => !deckOff.has(s.key));
+  setNav(
+    navHead() +
+      '<div class="deck-start">' +
+      `<button class="deck-go" data-deck-go=""${anyOn ? '' : ' disabled'} title="Proyectar la presentación (en ella: ← → para avanzar, Esc para salir)"><i class="codicon codicon-play"></i>Presentar</button>` +
+      '<div class="deck-sum">…</div></div>' +
+      '<div class="deck-group"><div class="deck-label">Texto de cada párrafo</div><div class="deck-segs">' +
+      seg('text', 'key', 'Idea clave', 'La primera frase de cada párrafo, como viñeta') +
+      seg('text', 'full', 'Completo', 'Los párrafos enteros (el texto se encoge si no cabe)') +
+      seg('text', 'none', 'Nada', 'Solo títulos, listas, figuras, tablas y ecuaciones') +
+      '</div></div>' +
+      '<div class="deck-group"><div class="deck-label">Incluir</div><div class="deck-chips">' +
+      chip('lists', 'Listas', 'Cada elemento de una lista, una viñeta') +
+      chip('figures', 'Figuras', 'Imágenes y figuras TikZ') +
+      chip('tables', 'Tablas', 'Cada tabla en su diapositiva') +
+      chip('math', 'Ecuaciones', 'Las ecuaciones destacadas') +
+      '</div></div>' +
+      '<div class="deck-group"><div class="deck-label">Inicio y final</div><div class="deck-chips">' +
+      chip('cover', 'Portada', 'Diapositiva de inicio: título, subtítulo, autor, institución y fecha') +
+      edit('cover', 'Personalizar la portada: título, subtítulo, autor, institución y fecha') +
+      chip('agenda', 'Índice', 'Diapositiva con los apartados que se van a presentar') +
+      chip('closing', 'Cierre', 'Diapositiva final: «¡Gracias! ¿Preguntas?» y un contacto') +
+      edit('closing', 'Personalizar el cierre: título, subtítulo y contacto') +
+      '</div></div>' +
+      '<div class="deck-group"><div class="deck-label">Estilo</div><div class="deck-segs">' +
+      seg('theme', 'light', 'Claro', 'Fondo blanco') +
+      seg('theme', 'dark', 'Oscuro', 'Fondo oscuro, para salas con poca luz') +
+      seg('theme', 'blue', 'Azul', 'Títulos sobre una banda de color, al estilo de Beamer') +
+      '</div></div>' +
+      (all.length
+        ? '<div class="deck-pick-head"><span class="deck-label">Apartados</span><span><button data-deck-all="1">Todos</button><button data-deck-all="0">Ninguno</button></span></div>' +
+          `<div class="deck-list">${all
+            .map((s) => {
+              const on = !deckOff.has(s.key);
+              return (
+                `<label class="deck-item dl-${Math.min(s.level, 3)}${on ? ' on' : ''}" data-key="${escHtml(s.key)}">` +
+                `<input type="checkbox"${on ? ' checked' : ''}><span class="deck-num">${escHtml(s.num)}</span><span class="deck-text">${escHtml(s.title)}</span>` +
+                (on ? `<button class="deck-from" data-deck-go="${escHtml(s.key)}" title="Presentar desde este apartado"><i class="codicon codicon-play"></i></button>` : '') +
+                '</label>'
+              );
+            })
+            .join('')}</div>`
+        : '<div class="nav-empty">Los títulos del documento serán los apartados de la presentación.<br>Usa los estilos <b>Título 1</b>, <b>Título 2</b>… de la pestaña Inicio.</div>'),
+  );
+  countSlides();
+}
+
+/** Marca o desmarca un apartado, y con él los que cuelgan de él. */
+function toggleDeckSection(key: string, on: boolean): void {
+  const all = deckSections(true);
+  const k = all.findIndex((s) => s.key === key);
+  if (k < 0) return;
+  for (let j = k; j < all.length && (j === k || all[j].level > all[k].level); j++) {
+    if (on) deckOff.delete(all[j].key);
+    else deckOff.add(all[j].key);
+  }
+  renderDeckPanel();
+}
+
+function setDeckOption(id: string, value?: string): void {
+  if (id === 'text' && (value === 'key' || value === 'full' || value === 'none')) deckOpts.text = value;
+  else if (id === 'theme' && (value === 'light' || value === 'dark' || value === 'blue')) deckOpts.theme = value;
+  else if (id in DECK_DEFAULTS && typeof deckOpts[id as keyof DeckOptions] === 'boolean') {
+    const flag = id as 'lists' | 'figures' | 'tables' | 'math' | 'cover' | 'agenda' | 'closing';
+    deckOpts[flag] = !deckOpts[flag];
+  } else return;
+  savePrefs({ deck: { ...deckOpts } });
+  renderDeckPanel();
+}
+
 navEl.addEventListener('mousedown', (e) => {
-  // (el foco no sale del documento, salvo para escribir en el buscador de referencias)
-  if (!(e.target as HTMLElement).closest('input')) e.preventDefault();
+  // (el foco no sale del documento, salvo para escribir en el buscador de referencias o elegir en sus listas)
+  if (!(e.target as HTMLElement).closest('input, select')) e.preventDefault();
+});
+navEl.addEventListener('change', (e) => {
+  const t = e.target as HTMLElement;
+  if (t instanceof HTMLSelectElement && t.classList.contains('ref-sort')) {
+    refSort = t.value === 'az' || t.value === 'cited' || t.value === 'unused' ? t.value : 'doc';
+    renderRefs();
+  } else if (t instanceof HTMLInputElement && t.type === 'checkbox') {
+    const key = (t.closest('.deck-item') as HTMLElement | null)?.dataset.key;
+    if (key !== undefined) toggleDeckSection(key, t.checked);
+  }
 });
 navEl.addEventListener('click', (e) => {
   const t = e.target as HTMLElement;
@@ -6337,7 +6681,42 @@ navEl.addEventListener('click', (e) => {
   }
   const mode = (t.closest('.nav-tab') as HTMLElement | null)?.dataset.mode;
   if (mode) {
-    setNavMode(mode === 'refs' ? 'refs' : 'outline');
+    setNavMode(mode === 'refs' || mode === 'deck' ? mode : 'outline');
+    return;
+  }
+  const fold = (t.closest('[data-fold]') as HTMLElement | null)?.dataset.fold;
+  if (fold !== undefined) {
+    if (!navShut.delete(fold)) navShut.add(fold);
+    updateOutline();
+    return;
+  }
+  const foldAllBtn = (t.closest('[data-fold-all]') as HTMLElement | null)?.dataset.foldAll;
+  if (foldAllBtn !== undefined) {
+    foldAll(foldAllBtn === '1');
+    return;
+  }
+  const go = t.closest('[data-deck-go]') as HTMLElement | null;
+  if (go) {
+    e.preventDefault();
+    present(go.dataset.deckGo || undefined);
+    return;
+  }
+  const editWhat = (t.closest('[data-deck-edit]') as HTMLElement | null)?.dataset.deckEdit;
+  if (editWhat) {
+    if (editWhat === 'cover') editCover();
+    else editClosing();
+    return;
+  }
+  const opt = t.closest('[data-opt]') as HTMLElement | null;
+  if (opt) {
+    setDeckOption(opt.dataset.opt as string, opt.dataset.val);
+    return;
+  }
+  const every = (t.closest('[data-deck-all]') as HTMLElement | null)?.dataset.deckAll;
+  if (every !== undefined) {
+    deckOff.clear();
+    if (every === '0') for (const s of deckSections(true)) deckOff.add(s.key);
+    renderDeckPanel();
     return;
   }
   const cmdBtn = t.closest('.ref-tools [data-cmd]') as HTMLElement | null;
@@ -8335,6 +8714,33 @@ function runTest(action: string, args: Record<string, unknown>): unknown {
         turn: refTurn ? `${refTurn.key}:${refTurn.at}` : '',
         here: Array.from(root.querySelectorAll<HTMLElement>('.cite-here')).map((x) => `${els.indexOf(x.closest('.block') as BlockEl)}:${x.getAttribute('data-tex')}`),
         on: (navEl.querySelector('.ref-item.on .ref-count') as HTMLElement | null)?.textContent ?? '',
+        acts: Array.from(navEl.querySelectorAll<HTMLElement>('.ref-item.on .ref-acts [data-ref]')).map((b) => b.dataset.ref),
+      };
+    }
+    case 'deck': {
+      // la cara «Presentación» del panel y la presentación proyectada
+      if (args.open) setNavMode('deck');
+      if (typeof args.toggle === 'string') toggleDeckSection(args.toggle, Boolean(args.on));
+      if (typeof args.opt === 'string') setDeckOption(args.opt, typeof args.val === 'string' ? args.val : undefined);
+      if (args.edit === 'cover') editCover();
+      else if (args.edit === 'closing') editClosing();
+      if (args.present) present(typeof args.from === 'string' ? args.from : undefined);
+      const deck = document.getElementById('deck');
+      if (deck && typeof args.key === 'string') window.dispatchEvent(new KeyboardEvent('keydown', { key: args.key, bubbles: true, cancelable: true }));
+      const slide = document.querySelector('#deck .deck-stage > .slide');
+      return {
+        mode: navOpen ? navMode : 'closed',
+        sections: deckSections(true).map((s) => `${deckOff.has(s.key) ? '-' : '+'}${s.num}|${s.title}|${s.level}`),
+        slides: buildSlides(deckSections(), deckOpts, deckCover(), deckCoverText).map((x) => `${x.kind}:${x.title}${x.points.length ? `:${x.points.length}` : ''}${x.media ? ':media' : ''}`),
+        open: isDeckOpen(),
+        // texto de la portada y del cierre, tal como salen
+        ends: ((): string[] => {
+          const all = buildSlides(deckSections(), { ...deckOpts, cover: true, closing: true }, deckCover(), deckCoverText);
+          return [all[0], all[all.length - 1]].map((x) => plainOf(`${x.title} | ${(x.html ?? '').replace(/<\/div>/g, ' | </div>')}`, document).replace(/\s+/g, ' ').replace(/[ |]+$/, ''));
+        })(),
+        count: document.querySelector('#deck .deck-count')?.textContent ?? '',
+        slide: slide ? `${slide.className}|${slide.querySelector('h1')?.textContent ?? ''}` : '',
+        fits: slide ? Array.from(slide.querySelectorAll<HTMLElement>('.s-body')).every((b) => b.scrollHeight <= b.clientHeight + 2) : true,
       };
     }
     case 'editVar': {

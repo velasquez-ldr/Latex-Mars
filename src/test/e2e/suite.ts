@@ -292,7 +292,7 @@ const tests: [string, () => Promise<void>][] = [
       assert.ok(r.icons > 40, `solo ${r.icons} iconos`);
       assert.deepEqual(r.missingIcons, [], 'todos los iconos existen en la fuente');
       r = (await preview.test('ribbon', { click: '[data-tab="insert"]' })) as Ribbon;
-      assert.deepEqual(r.groups, ['Páginas', 'Tablas', 'Ilustraciones', 'Vínculos', 'Texto', 'Símbolos']);
+      assert.deepEqual(r.groups, ['Páginas', 'Encabezado y pie', 'Tablas', 'Ilustraciones', 'Vínculos', 'Texto', 'Símbolos']);
       r = (await preview.test('ribbon', { click: '[data-tab="layout"]' })) as Ribbon;
       assert.deepEqual(r.groups, ['Configurar página', 'Texto', 'Documento']);
       assert.ok(r.checked.includes('lang=spanish') && r.checked.includes('orientation=portrait'), r.checked.join());
@@ -2352,6 +2352,19 @@ const tests: [string, () => Promise<void>][] = [
       await act('blur');
       assert.equal(text().split('knuth1984').length - 1, 3, text());
       assert.deepEqual((await refs()).items[0], 'knuth1984|3 citas');
+      // quitar del texto la cita a la que se ha ido (y solo esa), sin tocar la bibliografía
+      const before = text();
+      let at = await go();
+      for (let k = 0; k < 3 && !at.here.join().includes('fantasma'); k++) at = await go();
+      assert.match(at.here.join('|'), /\\cite\{knuth1984, fantasma\}/);
+      assert.ok(((await refs()) as unknown as { acts: string[] }).acts.includes('uncite'), 'la fuente recorrida ofrece quitar esa cita');
+      await refs({ key: 'knuth1984', act: 'uncite' });
+      await eventually(() => text() !== before, 'la cita sale del texto');
+      assert.equal(text(), before.replace('\\cite{knuth1984, fantasma}', '\\cite{fantasma}'), 'la cita se queda con la otra clave');
+      assert.ok(bib().includes('knuth1984'), 'la fuente sigue en el .bib');
+      r = await refs();
+      assert.deepEqual(r.items[0], 'knuth1984|2 citas', 'sin «1 de 2»: ya no se está en ninguna cita');
+      assert.ok(!((r as unknown as { acts: string[] }).acts.includes('uncite')), 'y ya no hay cita que quitar');
 
       // sin .bib: las fuentes son los \bibitem del propio documento
       const lista = (rows: string[]): string => `\\documentclass{article}\n\\begin{document}\n\nVer \\cite{dos}.\n\n\\begin{thebibliography}{9}\n${rows.join('\n')}\n\\end{thebibliography}\n\n\\end{document}\n`;
@@ -2367,6 +2380,84 @@ const tests: [string, () => Promise<void>][] = [
       await act('dialog', { values: { raw: '\\bibitem{dos} Autor Dos. \\textit{Otro libro}. 2003.' } });
       await eventually(() => text().includes('Otro libro'), 'el \\bibitem editado');
       assert.equal(text(), lista(['  \\bibitem{dos} Autor Dos. \\textit{Otro libro}. 2003.']));
+      await cmd('nav');
+    },
+  ],
+  [
+    'presentación: elegir apartados y proyectarlos en 16:9, hecha sola a partir del documento',
+    async () => {
+      interface Deck { mode: string; sections: string[]; slides: string[]; open: boolean; count: string; slide: string; fits: boolean; ends: string[] }
+      const deck = async (args: Record<string, unknown> = {}): Promise<Deck> => (await act('deck', args)) as Deck;
+      fs.writeFileSync(
+        path.join(dir, 'presentar.tex'),
+        [
+          '\\documentclass{article}', '\\title{Mi trabajo}', '\\author{Ana}', '\\begin{document}', '\\maketitle', '',
+          '\\section{Introducción}', 'La primera idea del trabajo es bastante clara y se explica aquí. Esta segunda frase no sale.', '',
+          '\\begin{itemize}', '\\item uno', '\\item dos', '\\end{itemize}', '',
+          '\\subsection{Contexto}', 'El contexto se resume en una sola frase bien larga para la viñeta.', '',
+          '\\section{Método}', '\\begin{equation}', 'E = mc^2', '\\end{equation}', '',
+          '\\section{Anexo}', 'Esto no se presenta.', '', '\\end{document}', '',
+        ].join('\n'),
+      );
+      await open('presentar.tex');
+      const original = text();
+      let d = await deck({ open: true });
+      assert.equal(d.mode, 'deck');
+      assert.deepEqual(d.sections, ['+1|Introducción|0', '+1.1|Contexto|1', '+2|Método|0', '+3|Anexo|0']);
+      // quitar un apartado; al quitar uno con otros debajo, se van con él
+      d = await deck({ toggle: '3|Anexo', on: false });
+      assert.deepEqual(d.sections.map((x) => x[0]), ['+', '+', '+', '-']);
+      assert.deepEqual(d.slides, [
+        'cover:Mi trabajo', 'agenda:Contenido', 'part:Introducción', 'content:Introducción:3', 'content:Contexto:1', 'content:Método:1', 'end:¡Gracias!',
+      ]);
+      d = await deck({ toggle: '1|Introducción', on: false });
+      assert.deepEqual(d.sections.map((x) => x[0]), ['-', '-', '+', '-'], 'Contexto cuelga de Introducción');
+      d = await deck({ toggle: '1|Introducción', on: true });
+      // opciones: sin portada ni índice ni cierre
+      for (const opt of ['cover', 'agenda', 'closing']) d = await deck({ opt });
+      assert.deepEqual(d.slides, ['part:Introducción', 'content:Introducción:3', 'content:Contexto:1', 'content:Método:1']);
+      // proyectar: 16:9, se avanza con el teclado y Esc sale; el documento no cambia
+      const setting = (section: string, key: string): unknown => vscode.workspace.getConfiguration(section).inspect(key)?.globalValue;
+      const settled = async (ok: () => boolean, what: string): Promise<void> => {
+        for (let k = 0; k < 50 && !ok(); k++) await sleep(100);
+        assert.ok(ok(), what);
+      };
+      const before = [setting('zenMode', 'showTabs'), setting('breadcrumbs', 'enabled')];
+      d = await deck({ present: true });
+      assert.equal(d.open, true);
+      // a toda pantalla: sin pestañas ni ruta del archivo mientras dura
+      await settled(() => setting('zenMode', 'showTabs') === 'none' && setting('breadcrumbs', 'enabled') === false, 'sin pestañas ni ruta al presentar');
+      assert.equal(d.count, '1 / 4');
+      assert.match(d.slide, /^slide s-part\|Introducción$/);
+      d = await deck({ key: 'ArrowRight' });
+      assert.equal(d.count, '2 / 4');
+      assert.ok(d.fits, 'el texto cabe en la diapositiva');
+      d = await deck({ key: 'End' });
+      assert.match(d.slide, /\|Método$/);
+      d = await deck({ key: 'Escape' });
+      assert.equal(d.open, false);
+      await settled(() => setting('zenMode', 'showTabs') === before[0] && setting('breadcrumbs', 'enabled') === before[1], 'al salir, los ajustes vuelven a como estaban');
+      // desde un apartado concreto
+      d = await deck({ present: true, from: '2|Método' });
+      assert.equal(d.count, '4 / 4');
+      await deck({ key: 'Escape' });
+      for (const opt of ['cover', 'agenda', 'closing']) await deck({ opt });
+      // portada y cierre: lo del documento, o lo que se escriba en sus cuadros
+      // (la fecha es la de \today: la de hoy)
+      const ends = async (): Promise<string[]> => (await deck()).ends.map((x) => x.replace(/ \| [^|]*\d{4}$/, ' | hoy'));
+      assert.deepEqual(await ends(), ['Mi trabajo | Mi trabajo | Ana | hoy', '¡Gracias! | ¿Preguntas? | Ana']);
+      await deck({ edit: 'cover' });
+      await act('dialog', { values: { subtitle: 'Defensa final', institute: 'Universidad del Café' } });
+      await deck({ edit: 'closing' });
+      await act('dialog', { values: { title: 'Gracias por venir', contact: 'ana@finca.org' } });
+      assert.deepEqual(await ends(), ['Mi trabajo | Mi trabajo | Defensa final | Ana | Universidad del Café | hoy', 'Gracias por venir | ¿Preguntas? | ana@finca.org']);
+      // y vuelta a lo de siempre (el cierre vale para todas las presentaciones)
+      await deck({ edit: 'cover' });
+      await act('dialog', { values: { subtitle: '', institute: '' } });
+      await deck({ edit: 'closing' });
+      await act('dialog', { values: { title: '¡Gracias!', contact: 'Ana' } });
+      assert.deepEqual(await ends(), ['Mi trabajo | Mi trabajo | Ana | hoy', '¡Gracias! | ¿Preguntas? | Ana']);
+      assert.equal(text(), original, 'presentar no toca el documento');
       await cmd('nav');
     },
   ],

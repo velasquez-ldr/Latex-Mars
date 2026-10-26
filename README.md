@@ -180,7 +180,8 @@ nombre en `xcolor` y `\textcolor[HTML]{1F4E79}{…}` cuando no.
 
 ### Panel de referencias
 
-El panel lateral tiene dos caras: **Esquema** (los títulos) y **Referencias**. La segunda se abre
+El panel lateral tiene tres caras: **Esquema** (los títulos, que se pueden plegar),
+**Referencias** y **Presentación** (ver más abajo). La de referencias se abre
 también con Referencias → **Gestionar**, y lista todas las fuentes del documento: las de su
 archivo `.bib` o, si no usa uno, los `\bibitem` de su lista.
 
@@ -189,6 +190,9 @@ archivo `.bib` o, si no usa uno, los `\bibitem` de su lista.
 - **Buscador** por autor, título o clave (sin distinguir tildes ni mayúsculas).
 - Un clic en una fuente lleva a su cita en el documento y la resalta. Si se cita varias veces,
   **cada clic lleva a la siguiente** (el panel dice «2 de 3») y tras la última vuelve a la primera.
+- **Quitar esta cita**: tras ir a una cita, el botón ⊘ de la fuente la quita del texto, solo esa
+  (en `\cite{a, b}` se queda `\cite{b}`), sin tocar la bibliografía. Se deshace con `Ctrl+Z`.
+- **Orden** de la lista: como en la bibliografía, por clave, más citadas o sin citar primero.
 - Al pasar el ratón aparecen sus acciones: **citarla** donde está el cursor, **editarla** (la
   entrada tal cual está escrita) y **quitarla**, que pide confirmación en el propio panel y
   avisa si se está citando.
@@ -196,6 +200,32 @@ archivo `.bib` o, si no usa uno, los `\bibitem` de su lista.
 - Al final, las **citas sin referencia**: claves que se citan pero no están en la bibliografía.
 
 Los cambios se escriben en el `.bib` (y se guarda) o en la lista del documento.
+
+### Presentación
+
+Convierte el documento en una presentación 16:9, como las de PowerPoint, sin escribir nada más:
+Vista → **Presentar**, o la cara **Presentación** del panel lateral (Vista → **Elegir**).
+
+- **Qué apartados**: una casilla por título; al quitar uno se van con él los que cuelgan de él.
+  **Todos** / **Ninguno**, y ▶ junto a cada apartado para empezar desde ahí.
+- **Texto de cada párrafo**: la **idea clave** (su primera frase, como viñeta), el párrafo
+  **completo** o **nada** (solo títulos, listas, figuras, tablas y ecuaciones).
+- **Incluir**: listas, figuras, tablas y ecuaciones.
+- **Inicio y final**: portada, índice y cierre. El lápiz ✎ junto a cada uno los personaliza, con
+  vista previa: la **portada** (título, subtítulo, autor, institución o curso y fecha; lo que no se
+  cambia sigue al `\title`, `\author` y `\date` del documento, y se guarda para cada documento) y
+  el **cierre** (título, subtítulo y contacto; vale para todas las presentaciones).
+- **Estilo**: claro, oscuro o azul (títulos sobre una banda de color, como Beamer).
+
+Cada capítulo (o sección, en un artículo) con apartados debajo abre con su portadilla; las
+viñetas se reparten de cinco en cinco; una figura con pocas viñetas va al lado, y las tablas
+van en su propia diapositiva. Si algo no cabe, el texto se encoge.
+
+Proyectando: `→`, espacio o clic para avanzar; `←` para volver; `Inicio`/`Fin`; **G** para la
+vista general; **B** pantalla en negro; **Esc** para salir. Ocupa **toda la pantalla**, como en
+PowerPoint: mientras dura, VS Code pasa al modo zen, sin barras, pestañas ni barra de título, y al
+salir todo vuelve a como estaba (también el reparto de los editores). La presentación no cambia
+el documento.
 
 ### Variables del documento
 
@@ -379,7 +409,8 @@ PDF final.
 - **Tablas**: en la pestaña Tabla, además de filas y columnas, alineación de la columna y
   poner o quitar todos los bordes.
 - **Panel de navegación** (Vista, o el botón de la barra de estado): esquema del documento con
-  sus títulos; un clic lleva a la sección.
+  sus títulos; un clic lleva a la sección. Los títulos con otros debajo se pliegan (▾), y
+  **Plegar todo** deja solo el primer nivel.
 - **Buscar**: `Ctrl+F` abre el buscador de VS Code sobre el documento visual.
 - **Vista de página** con hojas, márgenes y numeración, o vista continua; zoom y página actual
   en la barra de estado. Los párrafos se ven como los compone LaTeX: seguidos y con sangría en la

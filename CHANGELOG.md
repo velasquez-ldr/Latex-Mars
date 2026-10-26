@@ -1,5 +1,24 @@
 # Cambios
 
+## 0.30.1
+
+- **Presentación automática 16:9**: el panel lateral tiene una tercera cara, **Presentación**,
+  para elegir qué apartados presentar y qué llevan (idea clave de cada párrafo o el párrafo
+  entero, listas, figuras, tablas, ecuaciones, portada, índice y cierre) con estilo claro,
+  oscuro o azul. Vista → **Presentar** la proyecta **a pantalla completa**, como PowerPoint (modo
+  zen sin barras, pestañas ni barra de título; al salir, la ventana vuelve a como estaba):
+  viñetas, figura al lado, tablas en su diapositiva, autoajuste del texto, vista general (G),
+  pantalla en negro (B). No cambia el documento. La **portada** (título, subtítulo, autor,
+  institución y fecha) y el **cierre** (título, subtítulo y contacto) se personalizan con el
+  lápiz ✎ de cada uno, con vista previa.
+- **Panel de referencias**: tras ir a una cita, **quitar esa cita** del texto (y solo esa) sin
+  tocar la bibliografía; el «2 de 3» ya no se pierde al redibujar; **orden** de la lista (como en
+  la bibliografía, por clave, más citadas, sin citar primero); las citas comentadas con `%` ya
+  no cuentan.
+- **Esquema**: los títulos con otros debajo se pliegan; **Plegar todo** / **Desplegar todo**.
+- El panel lateral ya no salta al principio de la lista cada vez que se redibuja.
+- Pruebas: la de la cinta esperaba la pestaña Insertar sin el grupo «Encabezado y pie».
+
 ## 0.30.0
 
 Primera versión publicada en el Marketplace.

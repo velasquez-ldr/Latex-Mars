@@ -66,7 +66,44 @@ const onDisk = (uri: vscode.Uri): boolean => uri.scheme === 'file' || uri.scheme
 const USER_WORDS = 'mars.userWords';
 /** preferencias de la vista que valen para todos los documentos: papel, zoom, cinta, colores recientes */
 const VIEW_PREFS = 'mars.viewPrefs';
-const PREF_KEYS = ['paper', 'ribbonMin', 'colors', 'view', 'zoom'];
+const PREF_KEYS = ['paper', 'ribbonMin', 'colors', 'view', 'zoom', 'deck'];
+/**
+ * Ajustes que cambian solo mientras se presenta: sin pestañas en el modo zen, ni barra de título a
+ * pantalla completa, ni la ruta del archivo encima del editor. Lo que había se guarda aquí hasta
+ * restaurarlo (también si VS Code se cierra a mitad de una presentación: al volver a abrirlo).
+ */
+const PRESENT_SETTINGS: [section: string, key: string, value: unknown][] = [
+  ['zenMode', 'showTabs', 'none'],
+  ['window', 'customTitleBarVisibility', 'windowed'],
+  ['breadcrumbs', 'enabled', false],
+];
+const PRESENT_RESTORE = 'mars.presentRestore';
+
+async function changePresentSettings(ctx: vscode.ExtensionContext): Promise<void> {
+  if (ctx.globalState.get(PRESENT_RESTORE)) return;
+  const before: Record<string, unknown> = {};
+  for (const [section, key] of PRESENT_SETTINGS) {
+    // (lo que hay en la configuración del usuario; null = no lo tenía)
+    before[`${section}.${key}`] = vscode.workspace.getConfiguration(section).inspect(key)?.globalValue ?? null;
+  }
+  await ctx.globalState.update(PRESENT_RESTORE, before);
+  for (const [section, key, value] of PRESENT_SETTINGS) {
+    const config = vscode.workspace.getConfiguration(section);
+    if (config.get(key) !== value) await Promise.resolve(config.update(key, value, vscode.ConfigurationTarget.Global)).catch(() => undefined);
+  }
+}
+
+async function restorePresentSettings(ctx: vscode.ExtensionContext): Promise<void> {
+  const before = ctx.globalState.get<Record<string, unknown>>(PRESENT_RESTORE);
+  if (!before) return;
+  for (const [section, key] of PRESENT_SETTINGS) {
+    const id = `${section}.${key}`;
+    if (!(id in before)) continue;
+    const config = vscode.workspace.getConfiguration(section);
+    if (config.inspect(key)?.globalValue !== (before[id] ?? undefined)) await Promise.resolve(config.update(key, before[id] ?? undefined, vscode.ConfigurationTarget.Global)).catch(() => undefined);
+  }
+  await ctx.globalState.update(PRESENT_RESTORE, undefined);
+}
 /**
  * .tex que Mars abre a propósito en el editor de código (ir a una línea, abrir un archivo desde
  * un aviso): no se pasan al editor visual aunque haya otro abierto.
@@ -203,6 +240,7 @@ export class Preview {
     if (main) roots.push(path.dirname(main));
     panel.webview.options = { enableScripts: true, localResourceRoots: roots.map((r) => vscode.Uri.file(r)) };
     panel.webview.onDidReceiveMessage((m) => this.onMessage(m));
+    panel.onDidDispose(() => void this.presentMode(false));
     if (this.readonly) {
       void this.repo().then((root) => {
         this.gitDir = root;
@@ -210,6 +248,45 @@ export class Preview {
       });
     }
     panel.webview.html = this.html();
+  }
+
+  /** dónde se guardan los textos propios de la portada de la presentación de este documento */
+  private get coverKey(): string {
+    return `mars.deckCover:${this.doc.uri.toString()}`;
+  }
+
+  /** cómo estaba la ventana antes de presentar: las órdenes que se dieron y el reparto de los editores */
+  private stage: { steps: string[]; layout: unknown } | undefined;
+
+  /**
+   * La presentación ocupa toda la pantalla, como en PowerPoint: modo zen (pantalla completa, sin
+   * barras), sin pestañas ni barra de título, el grupo del editor visual maximizado y sin el
+   * centrado del modo zen. Una vista web no puede pedir la pantalla completa por sí misma: lo hace
+   * VS Code. Al salir, todo vuelve a como estaba.
+   */
+  private async presentMode(on: boolean): Promise<void> {
+    const run = (cmd: string, ...args: unknown[]): Thenable<unknown> => vscode.commands.executeCommand(cmd, ...args).then(undefined, () => undefined);
+    if (on && !this.stage) {
+      const steps = ['workbench.action.toggleZenMode', 'workbench.action.toggleMaximizeEditorGroup'];
+      if (vscode.workspace.getConfiguration('zenMode').get<boolean>('centerLayout', true)) steps.push('workbench.action.toggleCenteredLayout');
+      this.stage = { steps, layout: await run('vscode.getEditorLayout') };
+      await changePresentSettings(this.ctx);
+      // las órdenes actúan sobre el grupo activo: el del editor visual
+      this.panel.reveal(this.panel.viewColumn, false);
+      for (const cmd of steps) await run(cmd);
+    } else if (!on && this.stage) {
+      const { steps, layout } = this.stage;
+      this.stage = undefined;
+      try {
+        if (!this.panel.active) this.panel.reveal(this.panel.viewColumn, false);
+      } catch {
+        // (la pestaña se ha cerrado presentando: la ventana se restaura igual)
+      }
+      for (const cmd of [...steps].reverse()) await run(cmd);
+      await restorePresentSettings(this.ctx);
+      // (al salir de la pantalla completa los editores no recuperan solos su anchura)
+      if (layout) await run('vscode.setEditorLayout', layout);
+    }
   }
 
   get document(): vscode.TextDocument {
@@ -538,7 +615,7 @@ export class Preview {
 <link rel="stylesheet" href="${uri('media', 'vendor', 'codicons', 'codicon.css')}">
 <link rel="stylesheet" href="${uri('media', 'preview.css')}">
 </head>
-<body data-prefs="${JSON.stringify(this.ctx.globalState.get(VIEW_PREFS, {})).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}" data-pdfjs="${uri('media', 'vendor', 'pdfjs', 'pdf.min.mjs')}" data-pdfworker="${uri('media', 'vendor', 'pdfjs', 'pdf.worker.min.mjs')}" data-mathlive="${uri('media', 'vendor', 'mathlive', 'mathlive.min.mjs')}" data-mathfonts="${uri('media', 'vendor', 'mathlive', 'fonts')}">
+<body data-prefs="${JSON.stringify(this.ctx.globalState.get(VIEW_PREFS, {})).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}" data-cover="${JSON.stringify(this.ctx.workspaceState.get(this.coverKey, {})).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}" data-pdfjs="${uri('media', 'vendor', 'pdfjs', 'pdf.min.mjs')}" data-pdfworker="${uri('media', 'vendor', 'pdfjs', 'pdf.worker.min.mjs')}" data-mathlive="${uri('media', 'vendor', 'mathlive', 'mathlive.min.mjs')}" data-mathfonts="${uri('media', 'vendor', 'mathlive', 'fonts')}">
 <div id="toolbar"></div>
 <div id="page">
   <div id="root"></div>
@@ -1460,6 +1537,13 @@ export class Preview {
       case 'info':
         if (typeof m.text === 'string') void vscode.window.showInformationMessage(`Mars: ${m.text}`);
         break;
+      case 'presentMode':
+        void this.presentMode(m.on === true);
+        break;
+      case 'deckCover':
+        // textos propios de la portada de la presentación, para este documento
+        if (m.value && typeof m.value === 'object') void this.ctx.workspaceState.update(this.coverKey, m.value);
+        break;
       case 'copyImage':
         if (typeof m.path === 'string') this.copyImage(m.path);
         break;
@@ -1718,6 +1802,8 @@ export interface MarsApi {
 }
 
 export function activate(ctx: vscode.ExtensionContext): MarsApi {
+  // VS Code se cerró a mitad de una presentación: sus ajustes vuelven a como estaban
+  void restorePresentSettings(ctx);
   const provider = new MarsProvider(ctx);
   const open = async (uri: unknown, column: vscode.ViewColumn): Promise<void> => {
     const target = uri instanceof vscode.Uri ? uri : vscode.window.activeTextEditor?.document.uri;
