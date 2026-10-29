@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict';
 import * as path from 'node:path';
 import { test } from 'node:test';
-import { forward, inverse, parseSyncTex } from '../../synctex';
+import { caretLine, forward, inverse, parseSyncTex, plainText } from '../../synctex';
 
 const dir = path.resolve('/proyecto');
 /** 65781,76 «puntos escalados» de TeX hacen un punto del PDF. */
@@ -72,6 +72,30 @@ test('SyncTeX: del código al PDF (línea → página y posición)', () => {
   // otro archivo del proyecto, en su página
   assert.equal(forward(s, path.join(dir, 'capitulos', 'uno.tex'), 3)?.page, 2);
   assert.equal(forward(s, path.join(dir, 'no-esta.tex'), 1), undefined);
+});
+
+test('SyncTeX: del código al PDF con el párrafo entero y la línea del cursor', () => {
+  const s = parseSyncTex(SYNC, dir);
+  const main = path.join(dir, 'tesis.tex');
+  // el párrafo de las líneas 9 y 10 ocupa dos líneas del PDF, cada una con su ancho
+  const p = forward(s, main, 10, { from: 9, to: 10 });
+  assert.ok(p);
+  assert.deepEqual(p.boxes?.map((b) => [b.page, Math.round(b.x), Math.round(b.y), Math.round(b.width)]), [[1, 72, 132, 451], [1, 72, 144, 451]]);
+  // la línea 10 del código empieza a mitad de la primera línea del PDF
+  assert.equal(Math.round(p.y), 132);
+  // el título no se cuela en el párrafo
+  assert.equal(forward(s, main, 5, { from: 5, to: 5 })?.boxes?.length, 1);
+});
+
+test('SyncTeX: la línea del código en que está el cursor, por el texto que tiene delante', () => {
+  const lines = ['Hola \\textbf{mundo} esto', 'es una prueba % comentario', 'final.'];
+  assert.equal(caretLine(lines, ''), 0);
+  assert.equal(caretLine(lines, 'Hola mundo esto'), 0);
+  assert.equal(caretLine(lines, 'Hola mundo esto es una'), 1);
+  assert.equal(caretLine(lines, 'Hola mundo esto es una prueba fin'), 2);
+  // con tildes o mayúsculas distintas, o un texto que no aparece tal cual, sigue cayendo cerca
+  assert.equal(caretLine(lines, 'HOLA MUNDO ESTO ES UNA PRUEBA FINAL.'), 2);
+  assert.equal(plainText('Canción ﬁnal'), 'cancionfinal');
 });
 
 test('SyncTeX: del PDF al código (punto → archivo y línea)', () => {

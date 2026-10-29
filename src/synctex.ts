@@ -36,6 +36,20 @@ export interface PdfPoint {
   y: number;
   /** alto de la línea, para resaltarla */
   height: number;
+  /** las líneas del PDF que ocupa el párrafo entero, para resaltarlo con su ancho real */
+  boxes?: PdfBox[];
+  /** texto justo antes y después del cursor: con él el visor encuentra la palabra exacta */
+  before?: string;
+  after?: string;
+}
+
+/** Una línea del PDF: página y rectángulo en puntos desde arriba a la izquierda. */
+export interface PdfBox {
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 const same = (a: string, b: string): boolean => path.normalize(a).toLowerCase() === path.normalize(b).toLowerCase();
@@ -98,19 +112,74 @@ export function loadSyncTex(pdf: string): SyncTex | undefined {
   return undefined;
 }
 
-/** Dónde cae en el PDF la línea `line` (desde 1) de `file`: la primera caja de esa línea o de la siguiente que tenga alguna. */
-export function forward(s: SyncTex, file: string, line: number): PdfPoint | undefined {
+/**
+ * Dónde cae en el PDF la línea `line` (desde 1) de `file`: la primera caja de esa línea o de la siguiente
+ * que tenga alguna. Con `range` (las líneas del párrafo, desde 1) se busca dentro de él y se devuelven
+ * además todas las líneas del PDF que ocupa.
+ */
+export function forward(s: SyncTex, file: string, line: number, range?: { from: number; to: number }): PdfPoint | undefined {
   const tags = [...s.files].filter(([, f]) => same(f, file)).map(([k]) => k);
   if (!tags.length) return undefined;
   const mine = s.records.filter((r) => tags.includes(r.file) && r.kind !== '[');
   if (!mine.length) return undefined;
+  const order = (a: Record, b: Record): number => a.line - b.line || a.page - b.page || a.y - b.y || a.x - b.x;
+  // dentro del párrafo, la línea pedida o la siguiente que dibuje algo (el cursor puede estar en una orden)
+  const inside = range ? mine.filter((r) => r.line >= line && r.line <= range.to).sort(order)[0] : undefined;
   // la línea pedida; si no dibuja nada (una orden, una línea en blanco), la más cercana por debajo y luego por arriba
-  const after = mine.filter((r) => r.line >= line).sort((a, b) => a.line - b.line || a.page - b.page || a.y - b.y || a.x - b.x)[0];
+  const after = mine.filter((r) => r.line >= line).sort(order)[0];
   const before = mine.filter((r) => r.line < line).sort((a, b) => b.line - a.line || a.page - b.page || a.y - b.y)[0];
-  const hit = after && (!before || after.line - line <= 3) ? after : before ?? after;
-  // (de una marca suelta se toma la caja de su línea, que es la que da el alto)
-  const box = s.records.find((r) => r.kind === '(' && r.page === hit.page && Math.abs(r.y - hit.y) < 0.5 && r.x <= hit.x + 0.5 && r.x + r.width >= hit.x - 0.5) ?? hit;
-  return { page: hit.page, x: box.x, y: box.y - box.height, height: Math.max(box.height + box.depth, 8) };
+  const hit = inside ?? (after && (!before || after.line - line <= 3) ? after : before ?? after);
+  // (de una marca suelta se toma la caja de su línea, que es la que da el alto y el ancho)
+  const rows = s.records.filter((r) => r.kind === '(');
+  const lineOf = (m: Record): Record => rows.find((r) => r.page === m.page && Math.abs(r.y - m.y) < 0.5 && r.x <= m.x + 0.5 && r.x + r.width >= m.x - 0.5) ?? m;
+  const box = lineOf(hit);
+  const point: PdfPoint = { page: hit.page, x: box.x, y: box.y - box.height, height: Math.max(box.height + box.depth, 8) };
+  if (range) {
+    // TeX etiqueta cada línea del PDF con la línea del código en que acabó el párrafo; las marcas de
+    // dentro (glue, kerns, fórmulas) llevan la suya: por ellas se sabe qué líneas del PDF son del párrafo
+    const seen = new Set<Record>();
+    for (const r of mine) {
+      if (r.line < range.from || r.line > range.to) continue;
+      const b = lineOf(r);
+      if (b.width > 0 && (b.kind === '(' || b.kind === 'h')) seen.add(b);
+    }
+    point.boxes = [...seen]
+      .sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x)
+      .map((b) => ({ page: b.page, x: b.x, y: b.y - b.height, width: b.width, height: Math.max(b.height + b.depth, 8) }));
+  }
+  return point;
+}
+
+/** Texto reducido a letras y números, sin tildes ni mayúsculas: así se comparan el código, el editor y el PDF. */
+export const plainText = (s: string): string => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * En qué línea de `lines` (las del párrafo en el código, desde 0) está el cursor, sabiendo el texto que
+ * el editor enseña antes de él. Se busca el final de ese texto en el código, sin órdenes ni comentarios.
+ */
+export function caretLine(lines: string[], before: string): number {
+  const flat = lines.map((l) => plainText(l.replace(/(^|[^\\])%.*$/, '$1').replace(/\\[a-zA-Z@]+\*?/g, ' ')));
+  const joined = flat.join('');
+  const typed = plainText(before);
+  // dónde cae más o menos por la cantidad de texto; si el final de lo escrito aparece, ahí exactamente
+  let at = Math.min(typed.length, joined.length);
+  for (const k of [24, 12, 6]) {
+    const tail = typed.slice(-k);
+    if (tail.length < Math.min(k, typed.length) || !tail) continue;
+    let best = -1;
+    for (let i = joined.indexOf(tail); i >= 0; i = joined.indexOf(tail, i + 1)) if (best < 0 || Math.abs(i + tail.length - at) < Math.abs(best - at)) best = i + tail.length;
+    if (best >= 0) {
+      at = best;
+      break;
+    }
+  }
+  let sum = 0;
+  for (let i = 0; i < flat.length; i++) {
+    sum += flat[i].length;
+    // (el carácter justo antes del cursor está en esta línea)
+    if (at <= sum && flat[i].length > 0) return i;
+  }
+  return Math.max(flat.length - 1, 0);
 }
 
 /** A qué archivo y línea (desde 1) corresponde un punto del PDF. */

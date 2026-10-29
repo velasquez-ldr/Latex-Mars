@@ -13,7 +13,7 @@ import { type Change, changesBetween } from './diff';
 import { changedFiles, commitFiles, fileAt, fileAtSync, fileLog, repoRoot } from './git';
 import { type PdfResult, compilePdf } from './pdf';
 import { PdfView } from './pdfview';
-import { type PdfPoint, forward, inverse, loadSyncTex } from './synctex';
+import { type PdfPoint, caretLine, forward, inverse, loadSyncTex } from './synctex';
 import { TEMPLATES, TEMPLATE_FILES, TEMPLATE_LIST } from './templates';
 import { decodeText, findRoot, isMain, samePath, texPath } from './project';
 
@@ -538,9 +538,10 @@ export class Preview {
 
   /**
    * Del documento al PDF: dónde cae la línea `line` (desde 0). Con `show` lleva allí el visor;
-   * sin él solo devuelve el punto (lo usan las pruebas).
+   * sin él solo devuelve el punto (lo usan las pruebas). `at` afina: `end` es la última línea del
+   * párrafo y `before`/`after`, el texto que el editor enseña a cada lado del cursor.
    */
-  pdfForward(line: number, show = true): PdfPoint | undefined {
+  pdfForward(line: number, show = true, at: { end?: number; before?: string; after?: string } = {}): PdfPoint | undefined {
     const pdf = this.pdfPath();
     const sync = pdf && fs.existsSync(pdf) ? loadSyncTex(pdf) : undefined;
     if (!pdf || !fs.existsSync(pdf) || !sync) {
@@ -553,7 +554,17 @@ export class Preview {
       }
       return undefined;
     }
-    const point = forward(sync, this.doc.uri.fsPath, line + 1);
+    const end = typeof at.end === 'number' && at.end >= line ? Math.min(at.end, this.doc.lineCount - 1) : undefined;
+    let focus = line;
+    if (end !== undefined && typeof at.before === 'string') {
+      const lines = Array.from({ length: end - line + 1 }, (_, i) => this.doc.lineAt(line + i).text);
+      focus = line + caretLine(lines, at.before);
+    }
+    const point = forward(sync, this.doc.uri.fsPath, focus + 1, end !== undefined ? { from: line + 1, to: end + 1 } : undefined);
+    if (point && typeof at.before === 'string') {
+      point.before = at.before.slice(-60);
+      point.after = (at.after ?? '').slice(0, 60);
+    }
     if (show) {
       if (point) this.showPdf(pdf)?.goto(point);
       else void vscode.window.showInformationMessage('Mars: ese párrafo no aparece en el PDF (puede que se haya escrito después de exportarlo).');
@@ -1440,14 +1451,15 @@ export class Preview {
       case 'pdfForward':
         if (typeof m.line === 'number') {
           const line = m.line;
+          const at = { end: typeof m.end === 'number' ? m.end : undefined, before: typeof m.before === 'string' ? m.before : undefined, after: typeof m.after === 'string' ? m.after : undefined };
           const pdf = this.pdfPath();
           // sin PDF, o con uno anterior a lo último que se ha escrito: se compone primero y luego se va al párrafo
           const age = (f: string): number => (fs.existsSync(f) ? fs.statSync(f).mtimeMs : 0);
           if (pdf && (!fs.existsSync(pdf) || this.doc.isDirty || age(this.doc.uri.fsPath) > age(pdf))) {
             void this.exportPdf().then((r) => {
-              if (r.pdf) this.pdfForward(line);
+              if (r.pdf) this.pdfForward(line, true, at);
             });
-          } else this.pdfForward(line);
+          } else this.pdfForward(line, true, at);
         }
         break;
       case 'ready': {

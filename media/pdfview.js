@@ -103,6 +103,7 @@ async function open(url, keepScroll) {
   loading = true;
   try {
     doc = await (await pdfjs).getDocument({ url }).promise;
+    texts = new Map();
     await draw(keepScroll);
   } catch (err) {
     loading = false;
@@ -114,7 +115,29 @@ async function open(url, keepScroll) {
   }
 }
 
-/** Lleva la vista a un punto (página y posición en puntos desde arriba) y lo resalta un momento. */
+/** Desplaza la vista para que un punto de una página quede a un tercio de la altura. */
+function scrollToPoint(holder, k, y) {
+  const top = holder.getBoundingClientRect().top + window.scrollY + y * k;
+  window.scrollTo({ top: Math.max(top - window.innerHeight / 3, 0), behavior: 'smooth' });
+}
+
+/** Un rectángulo de resaltado sobre una página, en puntos del PDF. */
+function markAt(holder, k, cls, x, y, width, height) {
+  const mark = document.createElement('div');
+  mark.className = `mark ${cls}`;
+  mark.style.left = `${Math.max(x * k - 2, 0)}px`;
+  mark.style.top = `${Math.max(y * k - 2, 0)}px`;
+  mark.style.width = `${Math.max(width * k + 4, 3)}px`;
+  mark.style.height = `${Math.max(height * k + 4, 10)}px`;
+  holder.appendChild(mark);
+  return mark;
+}
+
+/**
+ * Lleva la vista a un punto (página y posición en puntos desde arriba) y lo resalta: el párrafo entero
+ * con el ancho de sus líneas, y después, si se sabe el texto que rodea al cursor, la palabra exacta.
+ */
+let gotoRound = 0;
 function goto(g) {
   const holder = loading ? undefined : pages.querySelector(`.pg[data-page="${g.page}"]`);
   const size = sizes[g.page - 1];
@@ -122,17 +145,195 @@ function goto(g) {
     pendingGoto = g;
     return;
   }
+  const mine = ++gotoRound;
   const k = holder.offsetHeight / size[1];
   pages.querySelectorAll('.mark').forEach((m) => m.remove());
-  const mark = document.createElement('div');
-  mark.className = 'mark';
-  mark.style.top = `${Math.max(g.y * k - 2, 0)}px`;
-  mark.style.height = `${Math.max(g.height * k + 4, 10)}px`;
-  holder.appendChild(mark);
-  const y = holder.getBoundingClientRect().top + window.scrollY + g.y * k;
-  window.scrollTo({ top: Math.max(y - window.innerHeight / 3, 0), behavior: 'smooth' });
-  setTimeout(() => mark.classList.add('out'), 1500);
-  setTimeout(() => mark.remove(), 4200);
+  const marks = [];
+  for (const b of g.boxes ?? []) {
+    const h = pages.querySelector(`.pg[data-page="${b.page}"]`);
+    const sz = sizes[b.page - 1];
+    if (h && sz) marks.push(markAt(h, h.offsetHeight / sz[1], 'para', b.x, b.y, b.width, b.height));
+  }
+  // sin las líneas del párrafo, la de la posición, de lado a lado de la página como antes
+  if (!marks.length) marks.push(markAt(holder, k, 'para', 0, g.y, size[0], g.height));
+  scrollToPoint(holder, k, g.y);
+  const fade = (list) => {
+    setTimeout(() => list.forEach((m) => m.classList.add('out')), 2200);
+    setTimeout(() => list.forEach((m) => m.remove()), 5200);
+  };
+  if (!g.before && !g.after) {
+    fade(marks);
+    return;
+  }
+  void findWord(g).then((w) => {
+    if (mine !== gotoRound) return;
+    if (w) {
+      const h = pages.querySelector(`.pg[data-page="${w.page}"]`);
+      const sz = sizes[w.page - 1];
+      if (h && sz) {
+        const kk = h.offsetHeight / sz[1];
+        for (const r of w.rects) marks.push(markAt(h, kk, 'word', r.x, r.y, r.width, r.height));
+        const caret = markAt(h, kk, 'caret', w.caret.x, w.caret.y, 0, w.caret.height);
+        caret.style.width = '2px';
+        caret.style.left = `${w.caret.x * kk - 1}px`;
+        marks.push(caret);
+        scrollToPoint(h, kk, w.caret.y);
+      }
+    }
+    fade(marks);
+  });
+}
+
+/** Igual que en la extensión: solo letras y números, sin tildes ni mayúsculas (las ligaduras se separan). */
+const plain = (s) => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+/** el texto de cada página, leído una sola vez por PDF abierto */
+let texts = new Map();
+
+async function pageText(n) {
+  if (!texts.has(n)) {
+    texts.set(
+      n,
+      (async () => {
+        const page = await doc.getPage(n);
+        const vp = page.getViewport({ scale: 1 });
+        const content = await page.getTextContent();
+        return content.items
+          .filter((it) => typeof it.str === 'string' && it.str.length)
+          .map((it) => {
+            const [x, y] = vp.convertToViewportPoint(it.transform[4], it.transform[5]);
+            const size = Math.hypot(it.transform[2], it.transform[3]) || it.height || 10;
+            return { str: it.str, x, base: y, size, width: it.width };
+          });
+      })(),
+    );
+  }
+  return texts.get(n);
+}
+
+/**
+ * Compara el texto del editor con el del PDF a partir del punto `cut` de `flat`: hacia atrás con `b`
+ * (lo de antes del cursor) y hacia delante con `a`. El PDF puede haber perdido letras (con las fuentes
+ * de siempre de pdflatex, «fi» sale como un hueco y la «í» se queda sin letra) o tener alguna de más:
+ * se toleran unas pocas. Devuelve cuántas coinciden y dónde empieza y acaba en `flat` la palabra del
+ * cursor (que tiene `left` letras antes de él y `right` después).
+ */
+function align(flat, cut, b, a, left, right) {
+  let miss = 0;
+  const budget = 2 + Math.floor((b.length + a.length) / 10);
+  // recorre `t` (desde su principio) contra `flat` desde `k0`, avanzando en la dirección `d`;
+  // devuelve las coincidencias y dónde está `flat` cuando se han pasado `want` letras de `t`
+  const walk = (t, k0, d, want) => {
+    let hits = 0;
+    let mark = want ? undefined : k0;
+    let i = 0;
+    let k = k0;
+    const ok = (kk) => kk >= 0 && kk < flat.length;
+    while (i < t.length && ok(k) && miss <= budget) {
+      if (t[i] === flat[k]) {
+        hits++;
+        i++;
+        k += d;
+      } else {
+        // la letra que más cerca vuelve a coincidir: 1 o 2 que faltan en el PDF, o que sobran en él
+        const gap = [[1, 0], [0, 1], [2, 0], [0, 2], [1, 1]].find(([si, sk]) => i + si < t.length && ok(k + sk * d) && t[i + si] === flat[k + sk * d]) ?? [1, 1];
+        i += gap[0];
+        k += gap[1] * d;
+        miss += Math.max(gap[0], gap[1]);
+      }
+      if (mark === undefined && i >= want) mark = k;
+    }
+    return { hits, mark: mark ?? k };
+  };
+  const back = walk([...b].reverse().join(''), cut - 1, -1, left);
+  const fwd = walk(a, cut, 1, right);
+  return { hits: back.hits + fwd.hits, start: left ? back.mark + 1 : cut, end: right ? fwd.mark : cut };
+}
+
+/**
+ * Busca en el texto del PDF, dentro de las líneas del párrafo, el punto donde mejor encaja el texto
+ * de antes del cursor seguido del de después. Se compara solo con letras y números: los espacios,
+ * los guiones de final de línea y las tildes no cuentan.
+ */
+async function findWord(g) {
+  const boxes = g.boxes?.length ? g.boxes : [{ page: g.page, x: 0, y: g.y, width: Infinity, height: g.height }];
+  const b = plain(g.before ?? '').slice(-30);
+  const a = plain(g.after ?? '').slice(0, 30);
+  if (b.length + a.length < 3) return undefined;
+  const left = plain(/[\p{L}\p{N}\u0300-\u036f]*$/u.exec(g.before ?? '')?.[0] ?? '').length;
+  const right = plain(/^[\p{L}\p{N}\u0300-\u036f]*/u.exec(g.after ?? '')?.[0] ?? '').length;
+  // (con menos de esto coincidiría por casualidad con cualquier sitio)
+  const enough = Math.max(3, Math.ceil((b.length + a.length) * 0.6));
+  let best;
+  for (const n of [...new Set([g.page, ...boxes.map((x) => x.page)])]) {
+    const rows = boxes.filter((x) => x.page === n);
+    const items = (await pageText(n)).filter((it) => rows.some((r) => it.base >= r.y - 2 && it.base <= r.y + r.height + 2 && it.x >= r.x - 4 && it.x <= r.x + r.width + 4));
+    // el texto de la zona, letra a letra, sabiendo de qué trozo y de qué carácter sale cada una
+    let flat = '';
+    const from = [];
+    items.forEach((it, i) => {
+      for (let j = 0; j < it.str.length; j++) {
+        const p = plain(it.str[j]);
+        flat += p;
+        for (let q = 0; q < p.length; q++) from.push([i, j]);
+      }
+    });
+    if (!from.length) continue;
+    for (let cut = 0; cut <= flat.length; cut++) {
+      const m = align(flat, cut, b, a, left, right);
+      if (m.hits < enough) continue;
+      // a igualdad, la más cercana a la línea del cursor
+      const [i] = from[Math.min(cut, from.length - 1)];
+      const dist = Math.abs(items[i].base - g.y) + (n === g.page ? 0 : 10000);
+      if (!best || m.hits > best.hits || (m.hits === best.hits && dist < best.dist)) best = { ...m, dist, page: n, items, from, cut };
+    }
+  }
+  return best && wordAt(best, /[\p{L}\p{N}]$/u.test(g.before ?? ''));
+}
+
+/** Para medir letras: un lienzo con una letra de imprenta parecida a la del documento. */
+let ruler;
+/**
+ * Dónde empieza cada carácter de un trozo de texto del PDF, en puntos desde su principio. pdf.js solo
+ * da el ancho del trozo entero: se reparte según lo que mide cada letra (una «m» más que una «i»).
+ */
+function edges(it) {
+  if (it.edges) return it.edges;
+  let w = Array.from(it.str, () => 1);
+  try {
+    ruler ??= document.createElement('canvas').getContext('2d');
+    ruler.font = '100px "Latin Modern Roman", "Computer Modern", "Times New Roman", serif';
+    w = Array.from(it.str, (c) => ruler.measureText(c).width || 30);
+  } catch {
+    // sin lienzo, todas las letras miden lo mismo
+  }
+  const total = w.reduce((a, b) => a + b, 0) || 1;
+  const out = [0];
+  for (const v of w) out.push(out[out.length - 1] + (v / total) * it.width);
+  it.edges = out;
+  return out;
+}
+
+/**
+ * Los rectángulos de la palabra del cursor (uno por trozo del PDF, si la parte una tilde o un salto
+ * de línea) y la posición del cursor, en puntos de la página. `inWord`: el cursor va pegado detrás de
+ * una letra; si no, delante de la siguiente.
+ */
+function wordAt(best, inWord) {
+  const box = (it) => ({ y: it.base - it.size * 0.8, height: it.size * 1.05 });
+  const rects = [];
+  for (let q = best.start; q < best.end; q++) {
+    const [i, j] = best.from[q];
+    const it = best.items[i];
+    const e = edges(it);
+    const r = rects[rects.length - 1];
+    if (r && r.i === i) r.end = it.x + e[j + 1];
+    else rects.push({ i, x: it.x + e[j], end: it.x + e[j + 1], ...box(it) });
+  }
+  const back = (inWord || best.cut >= best.from.length) && best.cut > 0;
+  const [ci, cj] = best.from[back ? best.cut - 1 : best.cut];
+  const cit = best.items[ci];
+  const caret = { x: cit.x + edges(cit)[back ? cj + 1 : cj], ...box(cit) };
+  return { page: best.page, rects: rects.map((r) => ({ x: r.x, y: r.y, width: Math.max(r.end - r.x, 2), height: r.height })), caret };
 }
 
 pages.addEventListener('dblclick', (e) => {

@@ -3,7 +3,7 @@ import { execSync } from 'node:child_process';
 import { test } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { renderLatex } from '../../latex/renderer';
-import { customCommand, engineFor, firstError, hintFor } from '../../pdf';
+import { customCommand, engineFor, fallbackFailureSummary, fallbackOnError, firstError, hintFor, isMiKTeX, latexmkArgs } from '../../pdf';
 
 const text = (html: string): string => (new JSDOM(`<div id="c">${html}</div>`).window.document.getElementById('c')?.textContent ?? '').replace(/\s+/g, ' ').trim();
 const all = (tex: string, opts: Parameters<typeof renderLatex>[1] = {}): string => renderLatex(tex, opts).blocks.map((b) => text(b.html)).join(' | ');
@@ -291,6 +291,38 @@ test('exportar a PDF: el motor que pide el documento y el primer error del regis
   const fle = 'This is pdfTeX\n(./d38.tex\n./d38.tex:53: Argument of \\language@active@arg> has an extra }.\n<inserted text> \n                \\par \nl.53   };\n\n./d38.tex:60: Otro error.';
   assert.equal(firstError(fle), 'Argument of \\language@active@arg> has an extra }. (d38.tex, línea 53: };)');
   assert.equal(firstError('C:/tesis/cap 1.tex:7: Undefined control sequence.\nl.7 \\cosa'), 'Undefined control sequence. (C:/tesis/cap 1.tex, línea 7: \\cosa)');
+});
+
+test('exportar a PDF: usa el motor directo si falla latexmk y conserva el resultado principal', async () => {
+  const primary = { code: 1, out: 'MiKTeX no encontró Perl' };
+  const fallback = { code: 0, out: 'PDF creado con pdflatex' };
+  let called = false;
+  const recovered = await fallbackOnError(
+    async () => primary,
+    async () => {
+      called = true;
+      return fallback;
+    },
+  );
+  assert.equal(called, true);
+  assert.deepEqual(recovered, { result: fallback, usedFallback: true, primaryResult: primary });
+
+  const alreadyWorked = await fallbackOnError(async () => fallback, async () => {
+    throw new Error('no debe ejecutar el fallback');
+  });
+  assert.deepEqual(alreadyWorked, { result: fallback, usedFallback: false });
+  assert.equal(
+    fallbackFailureSummary('pdflatex', 'latexmk', 'Missing file.cls\n! LaTeX Error: File `x.cls` not found.\nl.4', 'MiKTeX could not find Perl'),
+    'Falló pdflatex: LaTeX Error: File `x.cls` not found. (línea 4: ). También falló latexmk: MiKTeX could not find Perl.',
+  );
+});
+
+test('exportar a PDF: identifica MiKTeX para desactivar diálogos al compilar desde VS Code', () => {
+  assert.equal(isMiKTeX('MiKTeX-pdfTeX 4.27 (MiKTeX 26.5)'), true);
+  assert.equal(isMiKTeX('pdfTeX 3.141592653-2.6-1.40.27 (TeX Live 2025)'), false);
+  // latexmk también debe llamar al motor sin el diálogo de instalación, o se queda colgado
+  assert.deepEqual(latexmkArgs('xelatex', 'd.tex', true).slice(0, 2), ['-xelatex', '-xelatex=xelatex --enable-installer %O %S']);
+  assert.deepEqual(latexmkArgs('pdflatex', 'd.tex', false), ['-pdf', '-interaction=nonstopmode', '-file-line-error', '-synctex=1', 'd.tex']);
 });
 
 test('exportar a PDF: babel en español con flechas de TikZ se reconoce y trae su arreglo', () => {

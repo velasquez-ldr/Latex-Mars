@@ -100,7 +100,10 @@ export class PdfView {
   #pages { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 16px 12px 40px; }
   .pg { position: relative; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25), 0 8px 24px rgba(0,0,0,.18); }
   .pg canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
-  .mark { position: absolute; left: 0; right: 0; background: rgba(255, 196, 0, .38); border-left: 3px solid #f5a700; pointer-events: none; transition: opacity .9s ease-out 1.2s; }
+  .mark { position: absolute; pointer-events: none; transition: opacity .9s ease-out 1.2s; border-radius: 2px; }
+  .mark.para { background: rgba(255, 196, 0, .22); box-shadow: inset 3px 0 0 #f5a700; }
+  .mark.word { background: rgba(255, 150, 0, .45); outline: 1.5px solid #e07b00; }
+  .mark.caret { background: #d14b00; border-radius: 1px; }
   .mark.out { opacity: 0; }
   #msg { padding: 40px 20px; text-align: center; color: var(--vscode-descriptionForeground); }
 </style>

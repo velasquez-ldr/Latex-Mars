@@ -32,6 +32,60 @@ function run(cmd: string, args: string[], cwd: string, shell = false, env?: Node
   });
 }
 
+export async function fallbackOnError<T extends { code: number }>(
+  primary: () => Promise<T>,
+  fallback: () => Promise<T>,
+): Promise<{ result: T; usedFallback: boolean; primaryResult?: T }> {
+  const primaryResult = await primary();
+  if (primaryResult.code === 0) return { result: primaryResult, usedFallback: false };
+  return { result: await fallback(), usedFallback: true, primaryResult };
+}
+
+export function fallbackFailureSummary(engine: string, preferred: string, fallbackOut: string, primaryOut: string): string {
+  const summary = (out: string): string =>
+    firstError(out) ?? out.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(' · ').slice(0, 300) ?? 'sin más detalles';
+  return `Falló ${engine}: ${summary(fallbackOut)}. También falló ${preferred}: ${summary(primaryOut)}.`;
+}
+
+async function runEngine(engine: string, name: string, base: string, text: string, dir: string): Promise<{ code: number; out: string }> {
+  const args = ['-interaction=nonstopmode', '-file-line-error', '-synctex=1', name];
+  if (await usesMiKTeX(engine, dir)) args.unshift(MIKTEX_INSTALLER);
+  let result = await run(engine, args, dir);
+  // referencias, bibliografía e índices necesitan pasadas adicionales
+  if (result.code === 0) {
+    if (/\\bibliography\s*\{/.test(text) && (await has('bibtex'))) await run('bibtex', [base], dir);
+    else if (/\\addbibresource\s*\{/.test(text) && (await has('biber'))) await run('biber', [base], dir);
+    await run(engine, args, dir);
+    result = await run(engine, args, dir);
+  }
+  return result;
+}
+
+export function isMiKTeX(versionOutput: string): boolean {
+  return /\bMiKTeX\b/i.test(versionOutput);
+}
+
+/**
+ * MiKTeX, al faltarle un paquete, abre la ventana «Package Installation» y espera un clic; lanzado
+ * desde VS Code (sin consola, con windowsHide) esa ventana no se ve y la compilación se queda colgada
+ * hasta el límite de tiempo. Con --enable-installer instala lo que falte sin preguntar.
+ */
+const MIKTEX_INSTALLER = '--enable-installer';
+const miktexCache = new Map<string, boolean>();
+
+async function usesMiKTeX(engine: string, dir: string): Promise<boolean> {
+  if (process.platform !== 'win32') return false;
+  if (!miktexCache.has(engine)) miktexCache.set(engine, isMiKTeX((await run(engine, ['--version'], dir)).out));
+  return miktexCache.get(engine) as boolean;
+}
+
+/** Opciones de latexmk para el motor; con MiKTeX, el motor se llama con el instalador sin diálogo. */
+export function latexmkArgs(engine: 'pdflatex' | 'xelatex' | 'lualatex', name: string, miktex: boolean): string[] {
+  const flag = engine === 'pdflatex' ? '-pdf' : engine === 'xelatex' ? '-xelatex' : '-lualatex';
+  const program = miktex ? [`-${engine}=${engine} ${MIKTEX_INSTALLER} %O %S`] : [];
+  return [flag, ...program, '-interaction=nonstopmode', '-file-line-error', '-synctex=1', name];
+}
+
 /** El programa está en el PATH. */
 async function has(cmd: string): Promise<boolean> {
   const r = await run(process.platform === 'win32' ? 'where' : 'which', [cmd], process.cwd());
@@ -89,6 +143,7 @@ export async function compilePdf(file: string, text: string, custom = ''): Promi
   const before = fs.existsSync(pdf) ? fs.statSync(pdf).mtimeMs : 0;
   let tool: string;
   let result: { code: number; out: string };
+  let fallbackError: string | undefined;
   if (custom.trim()) {
     tool = custom.trim();
     result = await run(customCommand(tool), [], dir, true, { ...process.env, MARS_DOC: file });
@@ -96,23 +151,26 @@ export async function compilePdf(file: string, text: string, custom = ''): Promi
     const engine = engineFor(text);
     const name = path.basename(file);
     if (await has('latexmk')) {
-      tool = 'latexmk';
-      result = await run('latexmk', [engine === 'pdflatex' ? '-pdf' : engine === 'xelatex' ? '-xelatex' : '-lualatex', '-interaction=nonstopmode', '-file-line-error', '-synctex=1', name], dir);
+      const preferred = 'latexmk';
+      const attempt = await fallbackOnError(
+        async () => run(preferred, latexmkArgs(engine, name, await usesMiKTeX(engine, dir)), dir),
+        () => runEngine(engine, name, base, text, dir),
+      );
+      result = attempt.result;
+      tool = attempt.usedFallback ? `${engine} (alternativa a latexmk)` : preferred;
+      if (attempt.usedFallback && result.code !== 0) fallbackError = fallbackFailureSummary(engine, preferred, result.out, attempt.primaryResult?.out ?? '');
     } else if (await has('tectonic')) {
-      tool = 'tectonic';
       // (con --synctex el PDF queda enlazado con el documento, como con los demás motores)
-      result = await run('tectonic', ['--synctex', name], dir);
+      const attempt = await fallbackOnError(
+        () => run('tectonic', ['--synctex', name], dir),
+        () => runEngine(engine, name, base, text, dir),
+      );
+      result = attempt.result;
+      tool = attempt.usedFallback ? `${engine} (alternativa a tectonic)` : 'tectonic';
+      if (attempt.usedFallback && result.code !== 0) fallbackError = fallbackFailureSummary(engine, 'tectonic', result.out, attempt.primaryResult?.out ?? '');
     } else if (await has(engine)) {
       tool = engine;
-      const args = ['-interaction=nonstopmode', '-file-line-error', '-synctex=1', name];
-      result = await run(engine, args, dir);
-      // segunda pasada (y bibliografía si la hay) para índices, referencias y citas
-      if (result.code === 0) {
-        if (/\\bibliography\s*\{/.test(text) && (await has('bibtex'))) await run('bibtex', [base], dir);
-        else if (/\\addbibresource\s*\{/.test(text) && (await has('biber'))) await run('biber', [base], dir);
-        await run(engine, args, dir);
-        result = await run(engine, args, dir);
-      }
+      result = await runEngine(engine, name, base, text, dir);
     } else return { ok: false, missing: true };
   }
   const log = fs.existsSync(logFile) ? logFile : undefined;
@@ -126,6 +184,7 @@ export async function compilePdf(file: string, text: string, custom = ''): Promi
     // sin registro legible: se enseña la salida del programa
   }
   error ??= firstError(result.out) ?? result.out.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(' · ').slice(0, 300);
+  error = fallbackError ?? error;
   const hint = hintFor(text, error);
   // (con errores leves LaTeX deja igualmente un PDF: se ofrece, avisando)
   return { ok: false, pdf: fresh ? pdf : undefined, tool, error, log, ...hint };

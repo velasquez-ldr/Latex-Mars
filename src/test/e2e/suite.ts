@@ -2145,6 +2145,10 @@ const tests: [string, () => Promise<void>][] = [
         assert.equal(view.pages, 1, 'el visor dibuja la página del PDF');
         preview.pdfForward(5);
         assert.equal(Math.round(view.lastGoto?.y ?? 0), 52);
+        // con el párrafo entero y el texto del cursor, el visor recibe sus líneas y con qué buscar la palabra
+        preview.pdfForward(5, true, { end: 5, before: 'texto antes del cur', after: 'sor y después' });
+        assert.deepEqual(view.lastGoto?.boxes?.map((b) => [b.page, Math.round(b.y), Math.round(b.width)]), [[1, 52, 400]]);
+        assert.deepEqual([view.lastGoto?.before, view.lastGoto?.after], ['texto antes del cur', 'sor y después']);
         // doble clic en el PDF: el editor va al bloque de esa línea
         preview.pdfInverse(1, 100, 28);
         await preview.settle();

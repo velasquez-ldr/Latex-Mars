@@ -1,4 +1,4 @@
-import { caretOffset, caretToEnd, offsetOf, pointAt, setCaretOffset, units, wrapRange } from './caret';
+import { caretOffset, caretToEnd, offsetOf, pointAt, setCaretOffset, textAroundCaret, units, wrapRange } from './caret';
 import { CITE, citesIn, removeCite } from './cites';
 import { type CoverText, type DeckOptions, type DeckSection, type Slide, CLOSING_DEFAULTS, DECK_DEFAULTS, buildSlides, closingHtml, coverHtml, coverOf, isDeckOpen, openDeck, plainOf, slideHtml } from './deck';
 import { GALLERY, PALETTE, closeDialog, fillDialog, formulaProbe, isDialogOpen, openForm, openFormula, renderMath, setMathContext } from './dialogs';
@@ -3654,9 +3654,18 @@ const COMMANDS: Record<string, (arg?: string) => void> = {
   },
   issues: () => toggleIssues(),
   'pdf-goto': () => {
-    const line = active ? active.rs : lastEl?._b?.s;
-    if (line === undefined) post({ type: 'info', text: 'Pon el cursor en el párrafo que quieres ver en el PDF.' });
-    else post({ type: 'pdfForward', line });
+    const a = active;
+    const line = a ? a.rs : lastEl?._b?.s;
+    if (line === undefined) {
+      post({ type: 'info', text: 'Pon el cursor en el párrafo que quieres ver en el PDF.' });
+      return;
+    }
+    // con el texto a cada lado del cursor, el visor señala la palabra exacta y no solo el párrafo
+    const around = a ? textAroundCaret(content(a.el)) : undefined;
+    // (lo último escrito tiene que llegar al documento antes de buscarlo en el PDF; puede cambiar a.re)
+    if (a) flush(a);
+    const end = a ? (a.re >= a.rs ? a.re : undefined) : lastEl?._b?.e;
+    post({ type: 'pdfForward', line, end, before: around?.before.slice(-2000), after: around?.after.slice(0, 200) });
   },
   'ins-plot': () =>
     form(

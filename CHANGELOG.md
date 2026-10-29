@@ -1,5 +1,25 @@
 # Cambios
 
+## 0.30.5
+
+- **«Ver en el PDF» más preciso**: además del párrafo, el visor señala la palabra exacta donde está el cursor y marca su posición.
+  - El párrafo se resalta entero, línea a línea y con su ancho real, en lugar de una franja de una sola línea a todo el ancho de la página.
+  - Se busca la línea del código en que está el cursor, no la primera del párrafo.
+  - La palabra se encuentra aunque el PDF parta palabras con guion, pierda tildes o ligaduras como «fi» (con las fuentes por defecto de pdflatex).
+
+## 0.30.4
+
+- Con MiKTeX, la compilación ya no se queda colgada: latexmk y el motor se lanzan con `--enable-installer`, así los paquetes que falten se instalan solos en lugar de abrir una ventana «Package Installation» oculta que esperaba un clic.
+
+## 0.30.3
+
+- Si también falla el motor LaTeX alternativo, Mars muestra ese error junto con el del compilador preferido.
+
+## 0.30.2
+
+- Si `latexmk` o `tectonic` no pueden compilar, Mars intenta el motor LaTeX que requiere el documento, con pasadas adicionales para las referencias y la bibliografía.
+- La notificación del PDF indica cuándo se usó ese motor como alternativa.
+
 ## 0.30.1
 
 - **Presentación automática 16:9**: el panel lateral tiene una tercera cara, **Presentación**,

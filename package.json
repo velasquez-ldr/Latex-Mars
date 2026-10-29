@@ -2,7 +2,7 @@
   "name": "latex-mars",
   "displayName": "LaTeX Mars",
   "description": "Editor visual (WYSIWYM) de LaTeX: escribe sobre el documento como en Word, sin compilar a PDF",
-  "version": "0.30.1",
+  "version": "0.30.5",
   "publisher": "lider-mars",
   "license": "MIT",
   "repository": {
@@ -257,7 +257,7 @@
         "mars.pdf.command": {
           "type": "string",
           "default": "",
-          "description": "Orden con la que compilar el PDF (con %DOC% donde va el archivo), por ejemplo «latexmk -xelatex %DOC%». Vacío: Mars usa latexmk, tectonic o el motor que pida el documento, lo que encuentre instalado."
+          "description": "Orden con la que compilar el PDF (con %DOC% donde va el archivo), por ejemplo «latexmk -xelatex %DOC%». Vacío: Mars usa latexmk o tectonic y, si fallan, prueba el motor LaTeX del documento."
         }
       }
     }

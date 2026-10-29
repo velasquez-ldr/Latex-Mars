@@ -18,6 +18,34 @@ export function units(node: Node): number {
   return total;
 }
 
+/** Texto que se lee en `node`, sin adornos; cada átomo (una fórmula, una referencia) cuenta como un espacio. */
+export function visibleText(node: Node): string {
+  let s = '';
+  for (const ch of Array.from(node.childNodes)) {
+    if (ch.nodeType === 3) s += (ch as Text).data;
+    else if (isSkip(ch)) continue;
+    else if (isAtom(ch)) s += ' ';
+    else if (isEl(ch)) s += visibleText(ch);
+  }
+  return s;
+}
+
+/** Texto de `root` a cada lado del cursor, si el cursor está dentro. */
+export function textAroundCaret(root: Element): { before: string; after: string } | undefined {
+  const sel = root.ownerDocument.getSelection();
+  if (!sel || !sel.rangeCount) return undefined;
+  const r = sel.getRangeAt(0);
+  if (!root.contains(r.startContainer)) return undefined;
+  const side = (start: boolean): string => {
+    const x = root.ownerDocument.createRange();
+    x.selectNodeContents(root);
+    if (start) x.setEnd(r.startContainer, r.startOffset);
+    else x.setStart(r.startContainer, r.startOffset);
+    return visibleText(x.cloneContents());
+  };
+  return { before: side(true), after: side(false) };
+}
+
 /** Unidades que hay en `root` antes del punto (node, offset). */
 export function offsetOf(root: Element, node: Node, offset: number): number {
   const pre = root.ownerDocument.createRange();
